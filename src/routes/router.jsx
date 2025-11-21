@@ -14,6 +14,7 @@ import Unauthorized from '../pages/Unauthorized';
 import NotFound from '../pages/NotFound';
 import JobManager from '../pages/JobDescriptionPage.jsx';
 import ForgotPasswordPage from '../pages/ForgotPassword.jsx';
+import OnboardingPage from '../pages/EmployeeOnboardingPage.jsx';
 
 export const router = createBrowserRouter([
   {
@@ -38,7 +39,7 @@ export const router = createBrowserRouter([
         element: <MainLayout />,
         children: [
           { path: '/', element: <Dashboard /> },
-          { path: '/workspace', element: <Workspace /> },
+          { path: '/workspace', element: <OnboardingPage /> },
           { path: '/chat/:id', element: <div>Chat Interface</div> },
           { path: '/unauthorized', element: <Unauthorized /> },
           {
