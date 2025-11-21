@@ -13,6 +13,7 @@ import UserManager from '../pages/UserManager';
 import Unauthorized from '../pages/Unauthorized';
 import NotFound from '../pages/NotFound';
 import JobManager from '../pages/JobDescriptionPage.jsx';
+import ForgotPasswordPage from '../pages/ForgotPassword.jsx';
 
 export const router = createBrowserRouter([
   {
@@ -24,7 +25,7 @@ export const router = createBrowserRouter([
           { path: '/login', element: <LoginPage /> },
           { path: '/signup', element: <RegisterPage /> },
           { path: '/otp-page', element: <OTPPage /> },
-          { path: '/forgot-password', element: <div>Forgot Password</div> },
+          { path: '/forgot-password', element: <ForgotPasswordPage /> },
         ],
       },
     ],

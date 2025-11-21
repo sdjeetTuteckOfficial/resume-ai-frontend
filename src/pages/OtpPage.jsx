@@ -123,7 +123,7 @@ export default function OTPPage() {
       });
       console.log('res', response);
       // Update token if API returns a new fully authenticated token
-
+      localStorage.clear('email');
       setTimeout(() => {
         navigate('/login');
       }, 1200);
