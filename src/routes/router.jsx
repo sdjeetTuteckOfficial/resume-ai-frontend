@@ -2,6 +2,8 @@ import { createBrowserRouter } from 'react-router-dom';
 import PublicRoute from './guards/PublicRoute';
 import ProtectedRoute from './guards/ProtectedRoute';
 import AdminRoute from './guards/AdminRoute.jsx';
+import RegisterPage from '../pages/RegisterPage.jsx';
+import OTPPage from '../pages/OtpPage.jsx';
 import MainLayout from './layouts/MainLayout';
 import AuthLayout from './layouts/AuthLayout';
 import LoginPage from '../pages/LoginPage.jsx';
@@ -20,7 +22,8 @@ export const router = createBrowserRouter([
         element: <AuthLayout />,
         children: [
           { path: '/login', element: <LoginPage /> },
-          { path: '/signup', element: <div>Signup Page</div> },
+          { path: '/signup', element: <RegisterPage /> },
+          { path: '/otp-page', element: <OTPPage /> },
           { path: '/forgot-password', element: <div>Forgot Password</div> },
         ],
       },
