@@ -4,7 +4,7 @@ import ProtectedRoute from './guards/ProtectedRoute';
 import AdminRoute from './guards/AdminRoute.jsx';
 import MainLayout from './layouts/MainLayout';
 import AuthLayout from './layouts/AuthLayout';
-import { LoginPage } from '../pages/LoginPage.jsx';
+import LoginPage from '../pages/LoginPage.jsx';
 import Dashboard from '../pages/Dashboard';
 import Workspace from '../pages/Workspace';
 import UserManager from '../pages/UserManager';
