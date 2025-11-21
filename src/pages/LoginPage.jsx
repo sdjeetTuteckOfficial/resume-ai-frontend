@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Mail, Lock, Loader2 } from 'lucide-react';
+import { Mail, Lock, ArrowRight, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function LoginPage() {
@@ -13,133 +13,104 @@ export default function LoginPage() {
     setIsLoading(true);
     setMessage(null);
 
-    try {
-      const response = await fetch('http://localhost:8000/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || 'Login failed');
-
-      setMessage({ type: 'success', text: 'Redirecting...' });
-      localStorage.setItem('token', data.access_token);
-      localStorage.setItem('user', JSON.stringify(data.user));
-
-      setTimeout(() => {
-        window.location.href = '/';
-      }, 1200);
-    } catch (error) {
-      setMessage({
-        type: 'error',
-        text: error.message || 'Invalid credentials',
-      });
-    } finally {
+    // Simulate API Call
+    setTimeout(() => {
       setIsLoading(false);
-    }
+      setMessage({ type: 'success', text: 'Login Successful!' });
+    }, 1500);
   };
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.5 }}
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ delay: 0.2 }}
+      className='bg-white/80 backdrop-blur-lg p-8 rounded-2xl shadow-2xl border border-white/50'
     >
-      {/* Header - Reduced bottom margin */}
-      <div className='mb-6'>
-        <h2 className='text-2xl font-bold text-gray-900'>Welcome Back</h2>
-        <p className='text-gray-500 text-sm mt-1'>
-          Sign in to continue your journey
+      <div className='mb-8'>
+        <h2 className='text-3xl font-bold text-gray-800'>Welcome Back</h2>
+        <p className='text-gray-500 mt-2'>
+          Enter your credentials to access your account.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className='space-y-4'>
-        <div>
-          <label className='text-xs font-bold text-gray-700 ml-1 uppercase tracking-wide'>
-            Email
+      <form onSubmit={handleSubmit} className='space-y-6'>
+        <div className='space-y-2'>
+          <label className='text-sm font-medium text-gray-700'>
+            Email Address
           </label>
-          <div className='mt-1 relative'>
-            <Mail className='absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400' />
+          <div className='relative'>
+            <Mail className='absolute left-3 top-3 h-5 w-5 text-gray-400' />
             <input
               type='email'
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              disabled={isLoading}
-              placeholder='name@example.com'
-              className='w-full pl-10 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-sm'
+              placeholder='name@company.com'
+              className='w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all outline-none bg-white/50'
             />
           </div>
         </div>
 
-        <div>
-          <div className='flex justify-between items-center ml-1'>
-            <label className='text-xs font-bold text-gray-700 uppercase tracking-wide'>
+        <div className='space-y-2'>
+          <div className='flex justify-between'>
+            <label className='text-sm font-medium text-gray-700'>
               Password
             </label>
-            <a
-              href='/forgot-password'
-              className='text-xs text-blue-600 hover:text-blue-700 font-medium'
-            >
-              Forgot password?
+            <a href='#' className='text-sm text-blue-600 hover:underline'>
+              Forgot?
             </a>
           </div>
-          <div className='mt-1 relative'>
-            <Lock className='absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400' />
+          <div className='relative'>
+            <Lock className='absolute left-3 top-3 h-5 w-5 text-gray-400' />
             <input
               type='password'
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              disabled={isLoading}
               placeholder='••••••••'
-              className='w-full pl-10 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-sm'
+              className='w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all outline-none bg-white/50'
             />
           </div>
         </div>
 
         <motion.button
-          whileHover={{ scale: 1.01 }}
-          whileTap={{ scale: 0.99 }}
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
           type='submit'
           disabled={isLoading}
-          className='w-full py-2.5 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition-all duration-200 disabled:opacity-70 flex items-center justify-center gap-2 text-sm mt-2'
+          className='w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center gap-2'
         >
           {isLoading ? (
-            <>
-              {' '}
-              <Loader2 className='animate-spin h-4 w-4' /> Signing in...{' '}
-            </>
+            <Loader2 className='animate-spin' />
           ) : (
-            'Sign In'
+            <>
+              Sign In <ArrowRight className='w-4 h-4' />
+            </>
           )}
         </motion.button>
       </form>
 
       {message && (
-        <motion.div
-          initial={{ opacity: 0, y: 5 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={`mt-4 p-2 rounded text-center text-xs font-medium border ${
+        <div
+          className={`mt-4 p-3 rounded-lg text-center text-sm ${
             message.type === 'success'
-              ? 'bg-green-50 text-green-700 border-green-200'
-              : 'bg-red-50 text-red-700 border-red-200'
+              ? 'bg-green-100 text-green-700'
+              : 'bg-red-100 text-red-700'
           }`}
         >
           {message.text}
-        </motion.div>
+        </div>
       )}
 
-      <p className='text-center mt-6 text-gray-500 text-xs'>
-        Don't have an account?{' '}
-        <a
-          href='/signup'
-          className='font-bold text-blue-600 hover:text-blue-700'
-        >
-          Create free account
-        </a>
-      </p>
+      <div className='mt-8 text-center'>
+        <p className='text-gray-500 text-sm'>
+          Don't have an account?{' '}
+          <a href='/signup' className='text-blue-600 font-bold hover:underline'>
+            Sign Up
+          </a>
+        </p>
+      </div>
     </motion.div>
   );
 }
