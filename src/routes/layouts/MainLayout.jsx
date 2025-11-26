@@ -9,12 +9,9 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-
+import { useMockAuth } from '../../services/authService';
 // --- Mock Auth Hook (Kept from previous context) ---
 // Revert to: import { useMockAuth } from '../../services/authService';
-const useMockAuth = () => {
-  return { user: { role: 'admin' } };
-};
 
 export default function MainLayout() {
   const { user } = useMockAuth();
@@ -85,21 +82,23 @@ export default function MainLayout() {
         {/* Menu Items */}
         <div className='flex-1 overflow-y-auto'>
           <Menu menuItemStyles={menuItemStyles}>
-            <MenuItem
+            {/* <MenuItem
               component={<Link to='/' />}
               active={location.pathname === '/'}
               icon={<LayoutDashboard size={20} />}
             >
               Dashboard
-            </MenuItem>
-
-            <MenuItem
-              component={<Link to='/workspace' />}
-              active={location.pathname === '/workspace'}
-              icon={<CircleUser size={20} />}
-            >
-              Workspace
-            </MenuItem>
+            </MenuItem> */}
+            {console.log('user', user)}
+            {user?.role === 'user' && (
+              <MenuItem
+                component={<Link to='/job-onboarding' />}
+                active={location.pathname === '/job-onboarding'}
+                icon={<CircleUser size={20} />}
+              >
+                Self Onboarding
+              </MenuItem>
+            )}
 
             {user?.role === 'admin' && (
               <MenuItem

@@ -37,11 +37,16 @@ export default function LoginPage() {
       // Success State
       setMessage({ type: 'success', text: 'Welcome back! Redirecting...' });
       localStorage.setItem('token', data.access_token);
+      console.log('user', data.user);
       localStorage.setItem('user', JSON.stringify(data.user));
 
       // Redirect after a short delay to show the success message
       setTimeout(() => {
-        window.location.href = '/';
+        if (data.user.role !== 'user') {
+          window.location.href = '/admin/jobs';
+        } else {
+          window.location.href = '/job-onboarding';
+        }
       }, 1200);
     } catch (error) {
       // Error State

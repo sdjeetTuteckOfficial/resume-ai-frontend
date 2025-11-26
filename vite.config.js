@@ -10,6 +10,10 @@ export default defineConfig({
         plugins: [['babel-plugin-react-compiler']],
       },
     }),
+
     tailwindcss(),
   ],
+  // server: {
+  //   port: 3000, // Change to your desired port
+  // },
 });
