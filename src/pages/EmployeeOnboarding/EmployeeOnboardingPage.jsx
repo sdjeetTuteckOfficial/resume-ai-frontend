@@ -13,7 +13,7 @@ export default function OnboardingPage() {
   const [isPlugged, setIsPlugged] = useState(false);
   const [formData, setFormData] = useState({
     jobRole: '',
-    experience: '',
+    // experience: '', // Removed from requirements as per request
     bio: '',
     cvFile: null,
   });
@@ -49,12 +49,17 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className='w-full flex justify-center items-start pt-8'>
+    <div className='w-full min-h-screen flex justify-center items-start pt-8 bg-gray-50/50 p-4'>
       <motion.div
         layout
+        transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className='relative w-full max-w-[380px] p-6 rounded-3xl bg-white shadow-xl border border-gray-100 overflow-hidden'
+        className={`
+          relative w-full bg-white shadow-xl border border-gray-100 overflow-hidden rounded-3xl p-6
+          ${step === 2 ? 'max-w-4xl' : 'max-w-[400px]'} 
+        `}
+        // ^ Dynamic width: Wide for Step 2 (Jobs), Narrow for others
       >
         <AnimatedHeader isPlugged={isPlugged} />
 
@@ -63,6 +68,7 @@ export default function OnboardingPage() {
         <AnimatePresence mode='wait' custom={step}>
           {step === 1 && (
             <ConnectionStep
+              key='step1'
               isPlugged={isPlugged}
               onPlugged={setIsPlugged}
               onNext={nextStep}
@@ -71,6 +77,7 @@ export default function OnboardingPage() {
 
           {step === 2 && (
             <BasicInfoStep
+              key='step2'
               formData={formData}
               onChange={handleInputChange}
               onNext={nextStep}
@@ -80,6 +87,7 @@ export default function OnboardingPage() {
 
           {step === 3 && (
             <BioStep
+              key='step3'
               formData={formData}
               onChange={handleInputChange}
               onNext={nextStep}
@@ -89,6 +97,7 @@ export default function OnboardingPage() {
 
           {step === 4 && (
             <UploadStep
+              key='step4'
               formData={formData}
               onFileChange={handleFileChange}
               onRemoveFile={removeFile}
