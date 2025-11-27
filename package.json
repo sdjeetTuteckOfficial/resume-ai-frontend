@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.2.2",
     "@tailwindcss/vite": "^4.1.17",
     "@tiptap/extension-color": "^3.11.0",
     "@tiptap/extension-link": "^3.11.0",
@@ -23,8 +24,10 @@
     "lucide-react": "^0.554.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "react-hook-form": "^7.66.1",
     "react-pro-sidebar": "^1.1.0",
-    "react-router-dom": "^7.9.6"
+    "react-router-dom": "^7.9.6",
+    "yup": "^1.7.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
