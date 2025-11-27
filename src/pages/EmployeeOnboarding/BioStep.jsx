@@ -160,10 +160,7 @@ export default function BioStep({
     };
 
     try {
-      await axiosInstance.post(
-        'http://localhost:8000/api/user_details/user_entry',
-        apiPayload
-      );
+      await axiosInstance.post('/user_details/user_entry', apiPayload);
       onNext();
     } catch (err) {
       setApiError(err.response?.data?.detail || 'Connection failed.');
