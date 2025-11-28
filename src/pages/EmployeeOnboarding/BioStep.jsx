@@ -13,9 +13,11 @@ import {
   AlertCircle,
   Loader2,
 } from 'lucide-react';
+
+// Import your actual Axios instance here
 import axiosInstance from '../../security/axiosInstance';
 
-// --- Validation Schema (Same as before) ---
+// --- Validation Schema ---
 const schema = yup
   .object({
     firstName: yup.string().required('Required'),
@@ -32,7 +34,15 @@ const schema = yup
     skills: yup.string().required('Required'),
     cvFile: yup
       .mixed()
-      .test('required', 'Required', (value) => value && value.length > 0),
+      .test('required', 'Required', (value) => value && value.length > 0)
+      .test('fileType', 'Unsupported file type', (value) => {
+        if (!value || value.length === 0) return true;
+        return [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ].includes(value[0].type);
+      }),
   })
   .required();
 
@@ -40,7 +50,8 @@ const schema = yup
 const STEPS = [
   {
     id: 'identity',
-    title: 'Who are you?',
+    title: 'Personal Info',
+    subtitle: 'Who are you?',
     fields: ['firstName', 'lastName', 'phone', 'gender'],
     icon: User,
     color: 'text-blue-600',
@@ -48,7 +59,8 @@ const STEPS = [
   },
   {
     id: 'location',
-    title: 'Location',
+    title: 'Address Details',
+    subtitle: 'Where are you located?',
     fields: ['city', 'stateProvince'],
     icon: MapPin,
     color: 'text-emerald-600',
@@ -56,7 +68,8 @@ const STEPS = [
   },
   {
     id: 'professional',
-    title: 'Professional',
+    title: 'Professional Profile',
+    subtitle: 'Your skills and documents',
     fields: ['qualification', 'skills', 'cvFile'],
     icon: Briefcase,
     color: 'text-violet-600',
@@ -65,8 +78,14 @@ const STEPS = [
 ];
 
 // --- Compact Input Component ---
-// Changed: py-3 -> py-2, text-sm inputs, smaller margins
-const InputField = ({ label, error, register, name, ...props }) => (
+const InputField = ({
+  label,
+  error,
+  register,
+  name,
+  type = 'text',
+  ...props
+}) => (
   <div className='w-full'>
     <label className='text-xs font-semibold text-slate-500 block mb-1 uppercase tracking-wide'>
       {label}
@@ -74,8 +93,9 @@ const InputField = ({ label, error, register, name, ...props }) => (
     <input
       {...register(name)}
       {...props}
+      type={type}
       className={`
-        w-full px-3 py-2 bg-slate-50 border rounded-lg outline-none text-sm transition-all
+        w-full px-3 py-2 bg-slate-50 border rounded-lg outline-none text-sm transition-all placeholder:text-slate-400
         ${
           error
             ? 'border-red-400 focus:bg-red-50'
@@ -89,11 +109,12 @@ const InputField = ({ label, error, register, name, ...props }) => (
   </div>
 );
 
+// --- BioStep Component ---
 export default function BioStep({
   allData = {},
   setAllData = () => {},
   onNext = () => {},
-  onBack = () => {},
+  onPrev = () => {},
 }) {
   const [internalStep, setInternalStep] = useState(0);
   const [direction, setDirection] = useState(1);
@@ -116,10 +137,16 @@ export default function BioStep({
   const currentStepConfig = STEPS[internalStep];
 
   // --- Logic ---
-  const handleNextInternal = async () => {
+  const handleNextInternal = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+
     const isStepValid = await trigger(currentStepConfig.fields);
+
     if (isStepValid) {
       setApiError(null);
+      const currentData = watch();
+      setAllData((prev) => ({ ...prev, ...currentData }));
+
       if (internalStep < STEPS.length - 1) {
         setDirection(1);
         setInternalStep((prev) => prev + 1);
@@ -132,75 +159,94 @@ export default function BioStep({
   const handleBackInternal = () => {
     setApiError(null);
     if (internalStep > 0) {
+      const currentData = watch();
+      setAllData((prev) => ({ ...prev, ...currentData }));
       setDirection(-1);
       setInternalStep((prev) => prev - 1);
     } else {
-      onBack();
+      onPrev();
     }
   };
 
+  // --- UPDATED SUBMIT LOGIC FOR MULTIPART ---
   const finalSubmit = async (data) => {
     setLoading(true);
     setApiError(null);
     setAllData((prev) => ({ ...prev, ...data }));
 
-    const apiPayload = {
-      first_name: data.firstName,
-      last_name: data.lastName,
-      gender: data.gender,
-      phone: data.phone,
-      city: data.city,
-      state_province: data.stateProvince,
-      qualification: data.qualification,
-      skills: data.skills,
-      cv_file_url:
-        data.cvFile && data.cvFile.length > 0
-          ? data.cvFile[0].name
-          : 'pending_upload',
-    };
+    // 1. Create a FormData object
+    const formData = new FormData();
+
+    // 2. Append text fields (Mapping camelCase JS to snake_case Python)
+    formData.append('first_name', data.firstName);
+    formData.append('last_name', data.lastName);
+    formData.append('gender', data.gender);
+    formData.append('phone', data.phone);
+    formData.append('city', data.city);
+    formData.append('state_province', data.stateProvince);
+    formData.append('qualification', data.qualification);
+    formData.append('skills', data.skills);
+
+    // 3. Append the file
+    // React Hook Form returns a FileList, we need the first file
+    if (data.cvFile && data.cvFile.length > 0) {
+      // 'cv_file' matches the argument name in your FastAPI function
+      formData.append('cv_file', data.cvFile[0]);
+    }
 
     try {
-      await axiosInstance.post('/user_details/user_entry', apiPayload);
+      // 4. Send with Axios
+      // Note: We don't manually set Content-Type to multipart/form-data here.
+      // Axios automatically sets the correct header + boundary when it sees FormData.
+      await axiosInstance.post('/user_details/user_entry', formData);
+
       onNext();
     } catch (err) {
-      setApiError(err.response?.data?.detail || 'Connection failed.');
+      console.error(err);
+      setApiError(
+        err.response?.data?.detail || 'API submission failed. Please try again.'
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  // --- Framer Motion Variants ---
   const variants = {
-    enter: (dir) => ({ x: dir > 0 ? 20 : -20, opacity: 0 }),
+    enter: (dir) => ({ x: dir > 0 ? 30 : -30, opacity: 0 }),
     center: { x: 0, opacity: 1 },
-    exit: (dir) => ({ x: dir > 0 ? -20 : 20, opacity: 0 }),
+    exit: (dir) => ({ x: dir > 0 ? -30 : 30, opacity: 0 }),
   };
 
   return (
-    // Changed: Reduced min-height to 380px
-    <div className='w-full max-w-lg mx-auto flex flex-col min-h-[380px]'>
-      {/* Compact Header */}
+    <div className='w-full max-w-lg mx-auto flex flex-col min-h-[400px]'>
       <div className='mb-4 flex items-center justify-between border-b border-slate-100 pb-3'>
         <div className='flex items-center gap-3'>
           <div
-            className={`p-2 rounded-lg ${currentStepConfig.bg} ${currentStepConfig.color}`}
+            className={`p-2 rounded-xl ${currentStepConfig.bg} ${currentStepConfig.color} shadow-md`}
           >
-            <currentStepConfig.icon size={18} />
+            <currentStepConfig.icon size={20} />
           </div>
           <div>
-            <h2 className='text-lg font-bold text-slate-800 leading-tight'>
+            <h2 className='text-xl font-extrabold text-slate-900 leading-tight'>
               {currentStepConfig.title}
             </h2>
-            {/* Optional: Add subtitle back if needed, but removed for compactness */}
+            <p className='text-xs text-slate-500 mt-0.5'>
+              {currentStepConfig.subtitle}
+            </p>
           </div>
         </div>
 
-        {/* Compact Dots */}
+        {/* Compact Progress Dots */}
         <div className='flex space-x-1.5'>
-          {STEPS.map((_, idx) => (
+          {STEPS.map((stepConfig, idx) => (
             <div
               key={idx}
-              className={`w-1.5 h-1.5 rounded-full transition-all ${
-                idx === internalStep ? 'bg-slate-800 w-3' : 'bg-slate-200'
+              title={stepConfig.title}
+              className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                idx === internalStep
+                  ? `${stepConfig.color.replace('text', 'bg')} w-4 shadow-inner`
+                  : 'bg-slate-200'
               }`}
             />
           ))}
@@ -208,27 +254,36 @@ export default function BioStep({
       </div>
 
       {apiError && (
-        <div className='mb-3 p-2 bg-red-50 border border-red-100 text-red-600 text-xs rounded flex items-center'>
-          <AlertCircle size={14} className='mr-2' /> {apiError}
-        </div>
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className='mb-4 p-3 bg-red-50 border border-red-300 text-red-700 text-sm rounded-lg flex items-center'
+        >
+          <AlertCircle size={16} className='mr-2 flex-shrink-0' />
+          <span className='font-medium'>{apiError}</span>
+        </motion.div>
       )}
 
-      {/* Form Content - Reduced Spacing */}
+      {/* Form Content - Compacted */}
       <div className='flex-1 relative overflow-hidden'>
         <AnimatePresence mode='wait' custom={direction}>
-          <motion.div
+          <motion.form
             key={internalStep}
             custom={direction}
             variants={variants}
             initial='enter'
             animate='center'
             exit='exit'
-            transition={{ duration: 0.2 }}
-            className='space-y-4 pt-1' // Changed: space-y-6 -> space-y-4
+            transition={{ type: 'tween', duration: 0.3 }}
+            className='space-y-4 pt-2'
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleNextInternal();
+            }}
           >
             {/* 1. Identity */}
             {internalStep === 0 && (
-              <div className='grid grid-cols-2 gap-3'>
+              <div className='grid grid-cols-2 gap-4'>
                 <InputField
                   label='First Name'
                   name='firstName'
@@ -245,7 +300,7 @@ export default function BioStep({
                 />
                 <div className='col-span-2'>
                   <InputField
-                    label='Phone'
+                    label='Phone Number'
                     name='phone'
                     register={register}
                     error={errors.phone}
@@ -259,7 +314,13 @@ export default function BioStep({
                   </label>
                   <select
                     {...register('gender')}
-                    className='w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-blue-500'
+                    className={`w-full px-3 py-2 bg-slate-50 border rounded-lg text-sm outline-none transition-all
+                      ${
+                        errors.gender
+                          ? 'border-red-400 focus:bg-red-50'
+                          : 'border-slate-200 focus:border-blue-500 focus:bg-white'
+                      }
+                    `}
                   >
                     <option value=''>Select...</option>
                     <option value='Male'>Male</option>
@@ -277,7 +338,7 @@ export default function BioStep({
 
             {/* 2. Location */}
             {internalStep === 1 && (
-              <div className='space-y-3'>
+              <div className='space-y-4'>
                 <InputField
                   label='City'
                   name='city'
@@ -290,31 +351,37 @@ export default function BioStep({
                   name='stateProvince'
                   register={register}
                   error={errors.stateProvince}
-                  placeholder='NY'
+                  placeholder='NY, CA, etc.'
                 />
               </div>
             )}
 
             {/* 3. Professional */}
             {internalStep === 2 && (
-              <div className='space-y-3'>
+              <div className='space-y-4'>
                 <InputField
-                  label='Qualification'
+                  label='Highest Qualification'
                   name='qualification'
                   register={register}
                   error={errors.qualification}
-                  placeholder='B.Tech, MBA...'
+                  placeholder='B.Tech, MBA, PhD...'
                 />
 
                 <div>
                   <label className='text-xs font-semibold text-slate-500 block mb-1 uppercase tracking-wide'>
-                    Skills
+                    Key Skills (e.g., React, Node, SQL)
                   </label>
                   <textarea
                     {...register('skills')}
                     rows='2'
-                    placeholder='React, Node...'
-                    className='w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none resize-none focus:border-blue-500'
+                    placeholder='List your main skills, separated by commas.'
+                    className={`w-full px-3 py-2 bg-slate-50 border rounded-lg text-sm outline-none resize-none transition-all
+                      ${
+                        errors.skills
+                          ? 'border-red-400 focus:bg-red-50'
+                          : 'border-slate-200 focus:border-blue-500 focus:bg-white'
+                      }
+                    `}
                   />
                   {errors.skills && (
                     <p className='text-red-500 text-[10px] mt-0.5'>
@@ -329,10 +396,10 @@ export default function BioStep({
                       flex items-center justify-center w-full h-12 border border-dashed rounded-lg cursor-pointer transition-colors
                       ${
                         errors.cvFile
-                          ? 'border-red-300 bg-red-50'
-                          : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50'
+                          ? 'border-red-400 bg-red-50'
+                          : 'border-slate-300 hover:border-blue-500 hover:bg-blue-50'
                       }
-                   `}
+                    `}
                   >
                     <input
                       type='file'
@@ -341,12 +408,18 @@ export default function BioStep({
                       accept='.pdf,.doc,.docx'
                     />
                     {currentFile && currentFile.length > 0 ? (
-                      <div className='flex items-center text-emerald-600 text-xs font-medium'>
-                        <CheckCircle2 size={14} className='mr-1.5' />
-                        {currentFile[0].name.substring(0, 20)}...
+                      <div className='flex items-center text-emerald-600 text-sm font-medium'>
+                        <CheckCircle2 size={16} className='mr-2' />
+                        <span className='truncate max-w-[200px]'>
+                          {currentFile[0].name}
+                        </span>
                       </div>
                     ) : (
-                      <span className='text-xs text-slate-400'>
+                      <span className='text-sm font-medium text-slate-500'>
+                        <Briefcase
+                          size={16}
+                          className='inline mr-2 text-violet-500'
+                        />
                         Upload CV (PDF/DOC)
                       </span>
                     )}
@@ -359,32 +432,40 @@ export default function BioStep({
                 </div>
               </div>
             )}
-          </motion.div>
+          </motion.form>
         </AnimatePresence>
       </div>
 
       {/* --- Compact Footer --- */}
-      <div className='flex justify-between items-center pt-4 mt-2 border-t border-slate-100'>
+      <div className='flex justify-between items-center pt-4 mt-4 border-t border-slate-100'>
         <button
           type='button'
           onClick={handleBackInternal}
-          className='text-xs font-medium text-slate-400 hover:text-slate-700 px-2 py-1'
+          className='flex items-center text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-50'
+          disabled={loading}
         >
-          Back
+          <ArrowLeft size={16} className='mr-1' />
+          {internalStep === 0 ? 'Back to Step 2' : 'Previous'}
         </button>
 
         <button
-          type='button'
+          type='submit'
           onClick={handleNextInternal}
           disabled={loading}
-          className='flex items-center bg-slate-900 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all disabled:opacity-70'
+          className='flex items-center bg-slate-900 text-white px-6 py-2.5 rounded-xl text-base font-semibold shadow-lg shadow-slate-900/20 hover:bg-blue-700 transition-all disabled:opacity-50 disabled:bg-slate-500'
         >
           {loading ? (
-            <Loader2 size={14} className='animate-spin' />
+            <>
+              <Loader2 size={18} className='animate-spin mr-2' /> Submitting...
+            </>
           ) : internalStep === STEPS.length - 1 ? (
-            'Save'
+            <>
+              Save & Continue <ArrowRight size={18} className='ml-2' />
+            </>
           ) : (
-            'Next'
+            <>
+              Next <ArrowRight size={18} className='ml-2' />
+            </>
           )}
         </button>
       </div>
