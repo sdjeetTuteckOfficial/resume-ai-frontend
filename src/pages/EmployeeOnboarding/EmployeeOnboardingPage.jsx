@@ -1,19 +1,22 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// Component Imports
 import ProgressIndicator from './ProgressIndicator';
 import AnimatedHeader from './AnimatedHeader';
 import ConnectionStep from './ConnectionStep';
 import BasicInfoStep from './BasicInfoStep';
 import BioStep from './BioStep';
 import UploadStep from './UploadStep';
+import AiInterviewManager from './FileUpload'; // Import the Assessment Component
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [isPlugged, setIsPlugged] = useState(false);
+
   const [formData, setFormData] = useState({
     jobRole: '',
-    // experience: '', // Removed from requirements as per request
     bio: '',
     cvFile: null,
   });
@@ -31,7 +34,8 @@ export default function OnboardingPage() {
     setFormData((prev) => ({ ...prev, cvFile: null }));
   };
 
-  const nextStep = () => setStep((prev) => Math.min(prev + 1, 4));
+  // INCREASED MAX STEPS TO 5
+  const nextStep = () => setStep((prev) => Math.min(prev + 1, 5));
   const prevStep = () => setStep((prev) => Math.max(prev - 1, 1));
 
   const handleSubmit = async (e) => {
@@ -48,6 +52,9 @@ export default function OnboardingPage() {
     }
   };
 
+  // LAYOUT LOGIC: Wide for Step 2 (Basic Info) AND Step 4 (Assessment)
+  const isWideLayout = step === 2 || step === 4;
+
   return (
     <div className='w-full min-h-screen flex justify-center items-start pt-8 bg-gray-50/50 p-4'>
       <motion.div
@@ -57,13 +64,13 @@ export default function OnboardingPage() {
         animate={{ opacity: 1, y: 0 }}
         className={`
           relative w-full bg-white shadow-xl border border-gray-100 overflow-hidden rounded-3xl p-6
-          ${step === 2 ? 'max-w-4xl' : 'max-w-[400px]'} 
+          ${isWideLayout ? 'max-w-4xl' : 'max-w-[400px]'} 
         `}
-        // ^ Dynamic width: Wide for Step 2 (Jobs), Narrow for others
       >
         <AnimatedHeader isPlugged={isPlugged} />
 
-        {step > 1 && <ProgressIndicator currentStep={step} totalSteps={4} />}
+        {/* Updated Total Steps to 5 */}
+        {step > 1 && <ProgressIndicator currentStep={step} totalSteps={5} />}
 
         <AnimatePresence mode='wait' custom={step}>
           {step === 1 && (
@@ -95,9 +102,33 @@ export default function OnboardingPage() {
             />
           )}
 
+          {/* NEW STEP 4: AI ASSESSMENT */}
           {step === 4 && (
-            <UploadStep
+            <motion.div
               key='step4'
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className='w-full'
+            >
+              <AiInterviewManager
+                userId='current_user'
+                jobRole={formData.jobRole} // Pass the role entered in Step 2
+                onComplete={nextStep} // Pass function to go to Step 5
+              />
+              <button
+                onClick={prevStep}
+                className='mt-4 text-sm text-gray-400 hover:text-gray-600 underline w-full text-center'
+              >
+                Back to Bio
+              </button>
+            </motion.div>
+          )}
+
+          {/* MOVED UPLOAD TO STEP 5 */}
+          {step === 5 && (
+            <UploadStep
+              key='step5'
               formData={formData}
               onFileChange={handleFileChange}
               onRemoveFile={removeFile}

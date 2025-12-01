@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
-import axiosInstance from '../../security/axiosInstance';
+import axiosInstance from '../../security/axiosInstance'; // Ensure this path is correct
 import {
   Sparkles,
   Loader2,
@@ -31,33 +31,29 @@ const generateYupSchema = (questions) => {
 };
 
 // --- 2. MAIN COMPONENT ---
-export default function AiInterviewManager({ userId, jobRole }) {
+export default function AiInterviewManager({ userId, jobRole, onComplete }) {
   const [status, setStatus] = useState('idle'); // 'idle' | 'loading' | 'active' | 'error'
   const [questions, setQuestions] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // API Call to Generate Questions using Axios
+  // API Call to Generate Questions
   const handleGenerate = async () => {
-    // Note: User ID validation removed to allow token-based authentication via axiosInstance
-
     setStatus('loading');
     setErrorMessage('');
 
     try {
-      const response = await axiosInstance.post('/gap/analyze-gap');
+      // Send jobRole to backend to get relevant questions
+      const response = await axiosInstance.post('/gap/analyze-gap', {
+        job_role: jobRole,
+      });
 
-      // Axios returns the response body in .data
-      // Note: Ensure your backend returns the key "questions" or "screening_questions"
-      // Adjust 'data.questions' below to match your Pydantic schema output exactly.
       const data = response.data;
 
-      // Fallback to check multiple possible key names based on your previous schemas
+      // Handle various response structures
       const questionsList =
         data.questions || data.screening_questions || data.critical_gaps;
-      // Added 'critical_gaps' or whatever your exact schema returns if 'screening_questions' is nested.
-      // Based on previous context, it is likely data.screening_questions
 
-      if (!questionsList) {
+      if (!questionsList || questionsList.length === 0) {
         throw new Error('Invalid response format: No questions found.');
       }
 
@@ -65,18 +61,12 @@ export default function AiInterviewManager({ userId, jobRole }) {
       setStatus('active');
     } catch (error) {
       console.error('API Error:', error);
-
-      // robust error message extraction for Axios/FastAPI
       let msg = 'Failed to generate assessment';
       if (error.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
         msg = error.response.data?.detail || error.response.statusText;
       } else if (error.request) {
-        // The request was made but no response was received
         msg = 'No response from server. Please check your connection.';
       } else {
-        // Something happened in setting up the request that triggered an Error
         msg = error.message;
       }
 
@@ -85,11 +75,16 @@ export default function AiInterviewManager({ userId, jobRole }) {
     }
   };
 
-  const handleFinalSubmit = (answers) => {
+  const handleFinalSubmit = async (answers) => {
     console.log('Submitting to Backend:', answers);
-    // You can also use axios here for the submission
-    // axiosInstance.post('/api/submit', answers)...
-    alert('Assessment Submitted Successfully!');
+
+    // Simulate API submission delay
+    // await axiosInstance.post('/api/submit', answers);
+
+    // Move to next step in parent component
+    if (onComplete) {
+      onComplete();
+    }
   };
 
   // --- RENDER LOGIC ---
@@ -122,7 +117,7 @@ export default function AiInterviewManager({ userId, jobRole }) {
     <div
       onClick={status === 'loading' ? undefined : handleGenerate}
       className={`
-        relative w-full h-32 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all duration-300
+        relative w-full h-48 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all duration-300
         ${
           status === 'loading'
             ? 'border-amber-200 bg-amber-50 cursor-wait'
@@ -134,7 +129,7 @@ export default function AiInterviewManager({ userId, jobRole }) {
         <>
           <Loader2 className='w-8 h-8 text-amber-500 animate-spin mb-3' />
           <p className='text-xs font-bold text-amber-600 uppercase tracking-wider'>
-            AI is Analyzing Profile...
+            AI is Analyzing {jobRole ? `"${jobRole}"` : 'Profile'}...
           </p>
         </>
       ) : (
@@ -143,9 +138,14 @@ export default function AiInterviewManager({ userId, jobRole }) {
             <Sparkles className='w-6 h-6 text-blue-500' />
           </div>
           <p className='text-sm font-bold text-slate-600'>
-            Generate Interview Assessment
+            Start AI Interview Assessment
           </p>
-          <p className='text-xs text-slate-400 mt-1'>AI-Powered Gap Analysis</p>
+          <p className='text-xs text-slate-400 mt-1 px-4 text-center'>
+            Based on your role:{' '}
+            <span className='font-medium text-slate-600'>
+              {jobRole || 'General'}
+            </span>
+          </p>
         </>
       )}
     </div>
@@ -185,7 +185,7 @@ function ActiveForm({ questions, onSubmit }) {
       <form onSubmit={handleSubmit(onSubmit)} className='space-y-6'>
         {questions.map((field, index) => (
           <div
-            key={field.id || index} // Fallback to index if id is missing
+            key={field.id || index}
             className='bg-white p-5 rounded-xl border border-slate-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-blue-100 focus-within:border-blue-300'
           >
             <label className='block text-sm font-semibold text-slate-800 mb-3 leading-relaxed'>
