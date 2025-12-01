@@ -1,15 +1,17 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
-import axiosInstance from '../../security/axiosInstance'; // Ensure this path is correct
+import axios from 'axios';
 import {
   Sparkles,
   Loader2,
   AlertCircle,
   CheckCircle2,
   Send,
+  ShieldAlert,
 } from 'lucide-react';
+import axiosInstance from '../../security/axiosInstance';
 
 // --- 1. HELPER: Dynamic Schema Generator ---
 const generateYupSchema = (questions) => {
@@ -154,6 +156,7 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
 
 // --- 3. INTERNAL SUB-COMPONENT (The Form) ---
 function ActiveForm({ questions, onSubmit }) {
+  const [violationCount, setViolationCount] = useState(0);
   const yupSchema = useMemo(() => generateYupSchema(questions), [questions]);
 
   const {
@@ -165,8 +168,63 @@ function ActiveForm({ questions, onSubmit }) {
     mode: 'onBlur',
   });
 
+  // --- SECURITY & PROCTORING LOGIC ---
+  useEffect(() => {
+    // 1. Prevent Right Click
+    const handleContextMenu = (e) => {
+      e.preventDefault();
+      return false;
+    };
+
+    // 2. Prevent Copy, Cut, Paste
+    const handleCopyCutPaste = (e) => {
+      e.preventDefault();
+      return false;
+    };
+
+    // 3. Detect Tab Switching / Window Blur
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        setViolationCount((prev) => prev + 1);
+        // Note: 'alert' might be blocked by some browsers or strict environments.
+        // Consider using a modal state instead for better UX, but keeping alert for now as requested.
+        alert(
+          'WARNING: You have left the exam screen. This action is recorded.'
+        );
+      }
+    };
+
+    // Attach Listeners
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('copy', handleCopyCutPaste);
+    document.addEventListener('cut', handleCopyCutPaste);
+    document.addEventListener('paste', handleCopyCutPaste);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('copy', handleCopyCutPaste);
+      document.removeEventListener('cut', handleCopyCutPaste);
+      document.removeEventListener('paste', handleCopyCutPaste);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   return (
-    <div className='animate-in fade-in slide-in-from-bottom-4 duration-500'>
+    // Added 'select-none' to prevent text highlighting
+    <div className='animate-in fade-in slide-in-from-bottom-4 duration-500 select-none'>
+      {/* Violation Warning Banner */}
+      {violationCount > 0 && (
+        <div className='mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3 text-red-700 animate-pulse'>
+          <ShieldAlert className='w-5 h-5' />
+          <div className='text-xs font-semibold'>
+            Warning: Tab switch detected {violationCount} time(s). Further
+            actions may terminate the exam.
+          </div>
+        </div>
+      )}
+
       {/* Success Header */}
       <div className='mb-6 p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3'>
         <div className='p-2 bg-green-100 rounded-full'>
@@ -200,6 +258,8 @@ function ActiveForm({ questions, onSubmit }) {
                 {...register(field.id)}
                 rows={4}
                 placeholder={field.placeholder || 'Type your answer...'}
+                // Added onPaste prevent locally as double safety
+                onPaste={(e) => e.preventDefault()}
                 className={`w-full p-3 text-sm bg-slate-50 border rounded-lg outline-none transition-colors resize-y
                   ${
                     errors[field.id]
@@ -232,6 +292,7 @@ function ActiveForm({ questions, onSubmit }) {
                 type='text'
                 {...register(field.id)}
                 placeholder={field.placeholder}
+                onPaste={(e) => e.preventDefault()}
                 className={`w-full p-3 text-sm bg-slate-50 border rounded-lg outline-none transition-colors
                   ${
                     errors[field.id]
