@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
-import axios from 'axios';
+import axiosInstance from '../../security/axiosInstance';
 import {
   Sparkles,
   Loader2,
@@ -10,8 +10,15 @@ import {
   CheckCircle2,
   Send,
   ShieldAlert,
+  EyeOff,
+  Camera,
+  CameraOff,
+  UserCheck,
+  UserX,
+  Smartphone,
+  Eye,
+  History,
 } from 'lucide-react';
-import axiosInstance from '../../security/axiosInstance';
 
 // --- 1. HELPER: Dynamic Schema Generator ---
 const generateYupSchema = (questions) => {
@@ -79,11 +86,6 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
 
   const handleFinalSubmit = async (answers) => {
     console.log('Submitting to Backend:', answers);
-
-    // Simulate API submission delay
-    // await axiosInstance.post('/api/submit', answers);
-
-    // Move to next step in parent component
     if (onComplete) {
       onComplete();
     }
@@ -91,7 +93,6 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
 
   // --- RENDER LOGIC ---
 
-  // State 1: Error
   if (status === 'error') {
     return (
       <div className='flex items-center justify-between p-4 bg-red-50 border border-red-100 rounded-xl text-red-800'>
@@ -109,12 +110,10 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
     );
   }
 
-  // State 2: Active Form (Questions Loaded)
   if (status === 'active' && questions) {
     return <ActiveForm questions={questions} onSubmit={handleFinalSubmit} />;
   }
 
-  // State 3: Idle / Loading (Trigger Box)
   return (
     <div
       onClick={status === 'loading' ? undefined : handleGenerate}
@@ -156,7 +155,27 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
 
 // --- 3. INTERNAL SUB-COMPONENT (The Form) ---
 function ActiveForm({ questions, onSubmit }) {
-  const [violationCount, setViolationCount] = useState(0);
+  // Violation Counters
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
+  const [isWindowFocused, setIsWindowFocused] = useState(true);
+
+  // Webcam & Detection State
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [webcamError, setWebcamError] = useState('');
+
+  // AI Detection States
+  const [isFaceDetected, setIsFaceDetected] = useState(true);
+  const [isPhoneDetected, setIsPhoneDetected] = useState(false);
+  const [gazeDirection, setGazeDirection] = useState('CENTER');
+  const [debugStats, setDebugStats] = useState({ pitch: 0, yaw: 0 }); // For debugging
+  const [modelLoaded, setModelLoaded] = useState(false);
+
+  // Model Refs
+  const faceMeshModel = useRef(null);
+  const objectModel = useRef(null);
+  const detectionInterval = useRef(null);
+
   const yupSchema = useMemo(() => generateYupSchema(questions), [questions]);
 
   const {
@@ -168,77 +187,554 @@ function ActiveForm({ questions, onSubmit }) {
     mode: 'onBlur',
   });
 
+  // --- 1. LOAD AI MODELS DYNAMICALLY ---
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadModels = async () => {
+      // 1. Check if already loaded
+      if (window.faceLandmarksDetection && window.tf && window.cocoSsd) {
+        initModel();
+        return;
+      }
+
+      // 2. Set a timeout to give up on AI and just show video (Fallback)
+      const timeoutId = setTimeout(() => {
+        if (isMounted && !modelLoaded) {
+          console.warn('AI Model load timed out. Switch to passive mode.');
+          setModelLoaded(true);
+        }
+      }, 20000);
+
+      try {
+        // Load TFJS Core
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core';
+          script.async = true;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.body.appendChild(script);
+        });
+
+        // Load dependencies
+        await Promise.all([
+          new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter';
+            s.onload = resolve;
+            document.body.appendChild(s);
+          }),
+          new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src =
+              'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl';
+            s.onload = resolve;
+            document.body.appendChild(s);
+          }),
+        ]);
+
+        // Load Models
+        await Promise.all([
+          new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd';
+            s.onload = resolve;
+            document.body.appendChild(s);
+          }),
+          new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src =
+              'https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@0.0.3';
+            s.onload = resolve;
+            document.body.appendChild(s);
+          }),
+        ]);
+
+        if (isMounted) {
+          await initModel();
+        }
+        clearTimeout(timeoutId);
+      } catch (err) {
+        console.error('Failed to load AI models:', err);
+        if (isMounted) setModelLoaded(true);
+      }
+    };
+
+    const initModel = async () => {
+      try {
+        // Initialize Face Mesh Model
+        if (window.faceLandmarksDetection) {
+          console.log('Loading Face Mesh...');
+          const model = await window.faceLandmarksDetection.load(
+            window.faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
+          );
+          if (isMounted) faceMeshModel.current = model;
+        }
+
+        // Initialize Object Model (for Phone)
+        if (window.cocoSsd) {
+          console.log('Loading Object Model...');
+          const model = await window.cocoSsd.load();
+          if (isMounted) objectModel.current = model;
+        }
+
+        if (isMounted) {
+          setModelLoaded(true);
+          console.log('All Models Loaded');
+        }
+      } catch (e) {
+        console.error('Model Init Error', e);
+        if (isMounted) setModelLoaded(true);
+      }
+    };
+
+    loadModels();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // --- 2. WEBCAM & DETECTION LOOP ---
+  useEffect(() => {
+    const startWebcam = async () => {
+      try {
+        // First attempt with preferred constraints
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 320, height: 240, facingMode: 'user' },
+        });
+        handleStreamSuccess(stream);
+      } catch (err) {
+        console.warn(
+          'Standard webcam init failed, retrying with loose constraints...',
+          err
+        );
+        try {
+          // Fallback: minimal constraints
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+          });
+          handleStreamSuccess(stream);
+        } catch (fallbackErr) {
+          console.error('Webcam Error:', fallbackErr);
+          setWebcamError(
+            'Camera access denied. Please allow permissions in your browser settings.'
+          );
+        }
+      }
+    };
+
+    const handleStreamSuccess = (stream) => {
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          startDetection();
+        };
+      }
+    };
+
+    const startDetection = () => {
+      // Run detection every 500ms
+      detectionInterval.current = setInterval(async () => {
+        const video = videoRef.current;
+        if (video && video.readyState === 4) {
+          try {
+            // A. Face & Gaze Detection (FaceMesh)
+            if (faceMeshModel.current) {
+              const predictions = await faceMeshModel.current.estimateFaces({
+                input: video,
+              });
+
+              if (predictions.length > 0) {
+                setIsFaceDetected(true);
+                const keypoints = predictions[0].scaledMesh; // 468 keypoints
+
+                // Determine Gaze Direction
+                detectGaze(keypoints);
+
+                // Draw eyes on canvas (Visual feedback)
+                drawGaze(video, keypoints);
+              } else {
+                setIsFaceDetected(false);
+                setGazeDirection('UNKNOWN');
+              }
+            }
+
+            // B. Phone Detection (COCO-SSD)
+            if (objectModel.current) {
+              const objects = await objectModel.current.detect(video);
+              const phone = objects.find((obj) => obj.class === 'cell phone');
+
+              if (phone) {
+                setIsPhoneDetected(true);
+              } else {
+                setIsPhoneDetected(false);
+              }
+            }
+          } catch (err) {
+            console.warn('Detection Error', err);
+          }
+        }
+      }, 500);
+    };
+
+    // --- IMPROVED GAZE MATH ---
+    const detectGaze = (keypoints) => {
+      // --- 1. Pupil Tracking (Horizontal) ---
+      // Using Both Eyes for reliability
+
+      // Right Eye (Subject's Right, Screen Left)
+      const rInner = keypoints[33];
+      const rOuter = keypoints[133];
+      const rIris = keypoints[468];
+      const rWidth = Math.abs(rOuter[0] - rInner[0]);
+      // Ratio 0 = Inner (Nose), 1 = Outer (Ear)
+      const rDist = Math.abs(rIris[0] - rInner[0]);
+      const rRatio = rDist / rWidth;
+
+      // Left Eye (Subject's Left, Screen Right)
+      const lInner = keypoints[362]; // Nose side
+      const lOuter = keypoints[263]; // Ear side
+      const lIris = keypoints[473];
+      const lWidth = Math.abs(lOuter[0] - lInner[0]);
+      const lDist = Math.abs(lIris[0] - lInner[0]);
+      const lRatio = lDist / lWidth;
+
+      // Combined Horizontal Ratio
+      // Rightness = (R_Ratio + (1 - L_Ratio)) / 2
+
+      const combinedRatio = (rRatio + (1 - lRatio)) / 2;
+
+      // --- 2. Head Pitch (Looking Down/Up) ---
+      const noseTop = keypoints[168];
+      const noseTip = keypoints[1];
+      const chin = keypoints[152];
+      const lowerFaceLen = Math.abs(chin[1] - noseTip[1]);
+      const fullFaceHeight = Math.abs(chin[1] - noseTop[1]);
+      const pitchRatio = lowerFaceLen / fullFaceHeight;
+
+      // Update Debug Stats
+      setDebugStats({
+        pitch: pitchRatio.toFixed(2),
+        hRatio: combinedRatio.toFixed(2),
+      });
+
+      let direction = 'CENTER';
+
+      // Thresholds (Widened Center)
+      if (combinedRatio < 0.3) direction = 'LEFT';
+      else if (combinedRatio > 0.7) direction = 'RIGHT';
+
+      // Vertical Priority
+      if (pitchRatio < 0.4) {
+        direction = 'DOWN';
+      }
+
+      setGazeDirection(direction);
+    };
+
+    const drawGaze = (video, keypoints) => {
+      const ctx = canvasRef.current?.getContext('2d');
+      if (!ctx || !canvasRef.current) return;
+
+      // Match canvas size to video
+      canvasRef.current.width = video.videoWidth;
+      canvasRef.current.height = video.videoHeight;
+
+      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+
+      // Draw Iris points
+      const leftIris = keypoints[473];
+      const rightIris = keypoints[468];
+      const noseTip = keypoints[1];
+
+      ctx.fillStyle = '#00FF00'; // Green dots for pupils
+      if (gazeDirection !== 'CENTER') ctx.fillStyle = '#FF0000'; // Red if looking away
+
+      [leftIris, rightIris].forEach((point) => {
+        ctx.beginPath();
+        ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+
+      // Draw Nose Tip for Head tracking reference
+      ctx.fillStyle = 'yellow';
+      ctx.beginPath();
+      ctx.arc(noseTip[0], noseTip[1], 2, 0, 2 * Math.PI);
+      ctx.fill();
+
+      // Draw Face Box
+      const top = keypoints[10][1];
+      const bottom = keypoints[152][1];
+      const left = keypoints[234][0];
+      const right = keypoints[454][0];
+
+      ctx.strokeStyle = '#00FFFF';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(left, top, right - left, bottom - top);
+    };
+
+    startWebcam();
+
+    return () => {
+      if (detectionInterval.current) clearInterval(detectionInterval.current);
+      if (videoRef.current && videoRef.current.srcObject) {
+        const tracks = videoRef.current.srcObject.getTracks();
+        tracks.forEach((track) => track.stop());
+      }
+    };
+  }, [modelLoaded]);
+
   // --- SECURITY & PROCTORING LOGIC ---
   useEffect(() => {
-    // 1. Prevent Right Click
     const handleContextMenu = (e) => {
       e.preventDefault();
       return false;
     };
-
-    // 2. Prevent Copy, Cut, Paste
     const handleCopyCutPaste = (e) => {
       e.preventDefault();
       return false;
     };
 
-    // 3. Detect Tab Switching / Window Blur
+    // TAB SWITCH DETECTOR
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        setViolationCount((prev) => prev + 1);
-        // Note: 'alert' might be blocked by some browsers or strict environments.
-        // Consider using a modal state instead for better UX, but keeping alert for now as requested.
-        alert(
-          'WARNING: You have left the exam screen. This action is recorded.'
-        );
+        setTabSwitchCount((prev) => prev + 1);
       }
     };
 
-    // Attach Listeners
+    const handleBlur = () => {
+      setIsWindowFocused(false);
+      // Sometimes blur fires without visibility change (e.g. clicking iframe)
+      // We can count this as a switch too if needed, but let's stick to visibility for hard switches
+    };
+
+    const handleFocus = () => setIsWindowFocused(true);
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'PrintScreen') {
+        e.preventDefault();
+        alert('Screenshots are not allowed.');
+        if (navigator.clipboard) navigator.clipboard.writeText('');
+      }
+    };
+
     document.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('copy', handleCopyCutPaste);
     document.addEventListener('cut', handleCopyCutPaste);
     document.addEventListener('paste', handleCopyCutPaste);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
 
-    // Cleanup
     return () => {
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('copy', handleCopyCutPaste);
       document.removeEventListener('cut', handleCopyCutPaste);
       document.removeEventListener('paste', handleCopyCutPaste);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
     };
   }, []);
 
   return (
-    // Added 'select-none' to prevent text highlighting
-    <div className='animate-in fade-in slide-in-from-bottom-4 duration-500 select-none'>
-      {/* Violation Warning Banner */}
-      {violationCount > 0 && (
-        <div className='mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3 text-red-700 animate-pulse'>
-          <ShieldAlert className='w-5 h-5' />
-          <div className='text-xs font-semibold'>
-            Warning: Tab switch detected {violationCount} time(s). Further
-            actions may terminate the exam.
-          </div>
+    <div className='relative animate-in fade-in slide-in-from-bottom-4 duration-500 select-none'>
+      {/* --- WEBCAM FEED (Proctor View) --- */}
+      <div
+        className={`fixed top-4 right-4 z-40 w-56 bg-slate-900 rounded-lg overflow-hidden shadow-xl border transition-colors ${
+          !isFaceDetected || isPhoneDetected || gazeDirection === 'DOWN'
+            ? 'border-red-500 ring-2 ring-red-500'
+            : 'border-slate-700'
+        }`}
+      >
+        <div className='relative aspect-video bg-black flex items-center justify-center'>
+          {webcamError ? (
+            <div className='text-red-500 text-xs text-center p-2 flex flex-col items-center'>
+              <CameraOff className='w-6 h-6 mb-1' />
+              {webcamError}
+            </div>
+          ) : (
+            <>
+              {/* Video Layer */}
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className='w-full h-full object-cover transform scale-x-[-1]' // Mirror effect
+              />
+
+              {/* Canvas Layer for Eye Tracking */}
+              <canvas
+                ref={canvasRef}
+                className='absolute inset-0 w-full h-full transform scale-x-[-1]'
+              />
+
+              {/* Status Overlays */}
+              {faceMeshModel.current && (
+                <div className='absolute top-2 left-2 flex flex-col gap-1 items-start'>
+                  <div
+                    className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full backdrop-blur-sm ${
+                      isFaceDetected ? 'bg-black/60' : 'bg-red-600/90'
+                    }`}
+                  >
+                    <div
+                      className={`w-2 h-2 rounded-full ${
+                        isFaceDetected
+                          ? 'bg-green-500'
+                          : 'bg-white animate-pulse'
+                      }`}
+                    />
+                    <span className='text-[10px] font-medium text-white tracking-wide'>
+                      {isFaceDetected ? 'FACE OK' : 'NO FACE'}
+                    </span>
+                  </div>
+
+                  {/* Gaze Status */}
+                  {isFaceDetected && (
+                    <div
+                      className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full backdrop-blur-sm ${
+                        gazeDirection === 'CENTER'
+                          ? 'bg-black/60'
+                          : 'bg-amber-600/90'
+                      }`}
+                    >
+                      <Eye className='w-3 h-3 text-white' />
+                      <span className='text-[10px] font-medium text-white tracking-wide'>
+                        {gazeDirection === 'CENTER'
+                          ? 'FOCUSED'
+                          : `LOOKING ${gazeDirection}`}
+                      </span>
+                    </div>
+                  )}
+
+                  {isPhoneDetected && (
+                    <div className='flex items-center gap-1.5 px-2 py-0.5 bg-red-600/90 rounded-full backdrop-blur-sm animate-pulse'>
+                      <Smartphone className='w-3 h-3 text-white' />
+                      <span className='text-[10px] font-medium text-white tracking-wide'>
+                        PHONE
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* DEBUG STATS (Bottom Right of Video) */}
+              {faceMeshModel.current && isFaceDetected && (
+                <div className='absolute bottom-1 right-1 text-[8px] text-white/50 bg-black/40 px-1 rounded font-mono'>
+                  P:{debugStats.pitch} Gaze:{debugStats.hRatio}
+                </div>
+              )}
+
+              {!modelLoaded && !webcamError && (
+                <div className='absolute inset-0 flex items-center justify-center bg-black/50'>
+                  <Loader2 className='w-6 h-6 text-white animate-spin' />
+                  <span className='absolute mt-10 text-[10px] text-white/70'>
+                    Loading AI Models...
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div
+          className={`px-3 py-1.5 flex justify-between items-center text-[10px] transition-colors ${
+            !isFaceDetected || isPhoneDetected || gazeDirection === 'DOWN'
+              ? 'bg-red-900/50 text-red-200'
+              : 'bg-slate-800 text-slate-400'
+          }`}
+        >
+          <span className='font-medium'>
+            {faceMeshModel.current || objectModel.current
+              ? isPhoneDetected
+                ? 'Mobile Detected!'
+                : gazeDirection === 'DOWN'
+                ? 'Look at Screen!'
+                : 'Proctor Active'
+              : 'Monitoring Active'}
+          </span>
+          {(faceMeshModel.current || objectModel.current) &&
+            (isFaceDetected &&
+            !isPhoneDetected &&
+            gazeDirection === 'CENTER' ? (
+              <UserCheck className='w-3 h-3 text-green-400' />
+            ) : (
+              <ShieldAlert className='w-3 h-3 text-red-400 animate-pulse' />
+            ))}
+        </div>
+      </div>
+
+      {/* --- PRIVACY BLUR OVERLAY --- */}
+      {!isWindowFocused && (
+        <div className='fixed inset-0 z-50 bg-white/90 backdrop-blur-md flex flex-col items-center justify-center text-center p-8'>
+          <EyeOff className='w-16 h-16 text-slate-400 mb-4' />
+          <h2 className='text-2xl font-bold text-slate-800 mb-2'>
+            Exam Paused
+          </h2>
+          <p className='text-slate-600 max-w-md mb-8'>
+            You switched tabs or lost focus. This event has been recorded.
+          </p>
+          <button
+            onClick={() => setIsWindowFocused(true)}
+            className='px-8 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20'
+          >
+            Resume Assessment
+          </button>
         </div>
       )}
 
-      {/* Success Header */}
-      <div className='mb-6 p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3'>
-        <div className='p-2 bg-green-100 rounded-full'>
-          <CheckCircle2 className='w-5 h-5 text-green-700' />
+      {/* --- VIOLATION DASHBOARD --- */}
+      <div className='grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6'>
+        {/* Success/Status Header */}
+        <div className='p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3'>
+          <div className='p-2 bg-green-100 rounded-full'>
+            <CheckCircle2 className='w-5 h-5 text-green-700' />
+          </div>
+          <div>
+            <h3 className='text-sm font-bold text-green-900'>
+              Assessment Active
+            </h3>
+            <p className='text-xs text-green-700'>
+              {questions.length} Questions
+            </p>
+          </div>
         </div>
-        <div>
-          <h3 className='text-sm font-bold text-green-900'>
-            Assessment Generated
-          </h3>
-          <p className='text-xs text-green-700'>
-            Please answer the {questions.length} questions below.
-          </p>
-        </div>
+
+        {/* Tab Switch Warning */}
+        {tabSwitchCount > 0 && (
+          <div className='p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3 animate-pulse'>
+            <div className='p-2 bg-red-100 rounded-full'>
+              <History className='w-5 h-5 text-red-700' />
+            </div>
+            <div>
+              <h3 className='text-sm font-bold text-red-900'>
+                Tab Switches Detected
+              </h3>
+              <p className='text-xs text-red-700 font-semibold'>
+                Count: {tabSwitchCount} times
+              </p>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Immediate Detection Warning */}
+      {(!isFaceDetected || isPhoneDetected || gazeDirection === 'DOWN') && (
+        <div className='mb-4 p-3 bg-red-100 border border-red-300 rounded-lg flex items-center gap-3 text-red-800 animate-bounce'>
+          <ShieldAlert className='w-5 h-5 flex-shrink-0' />
+          <div className='text-xs font-bold'>
+            ALERT:
+            {!isFaceDetected && <span> Face not visible! </span>}
+            {isPhoneDetected && <span> Mobile Phone detected! </span>}
+            {gazeDirection === 'DOWN' && <span> Looking down/away! </span>}
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit(onSubmit)} className='space-y-6'>
         {questions.map((field, index) => (
@@ -258,7 +754,6 @@ function ActiveForm({ questions, onSubmit }) {
                 {...register(field.id)}
                 rows={4}
                 placeholder={field.placeholder || 'Type your answer...'}
-                // Added onPaste prevent locally as double safety
                 onPaste={(e) => e.preventDefault()}
                 className={`w-full p-3 text-sm bg-slate-50 border rounded-lg outline-none transition-colors resize-y
                   ${
