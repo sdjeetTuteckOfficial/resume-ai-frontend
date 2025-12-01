@@ -18,6 +18,7 @@ import {
   Smartphone,
   Eye,
   History,
+  Keyboard,
 } from 'lucide-react';
 
 // --- 1. HELPER: Dynamic Schema Generator ---
@@ -168,8 +169,12 @@ function ActiveForm({ questions, onSubmit }) {
   const [isFaceDetected, setIsFaceDetected] = useState(true);
   const [isPhoneDetected, setIsPhoneDetected] = useState(false);
   const [gazeDirection, setGazeDirection] = useState('CENTER');
-  const [debugStats, setDebugStats] = useState({ pitch: 0, yaw: 0 }); // For debugging
+  const [debugStats, setDebugStats] = useState({ pitch: 0, yaw: 0, vRatio: 0 }); // For debugging
   const [modelLoaded, setModelLoaded] = useState(false);
+
+  // Activity Tracking for Gaze Logic
+  const lastActivityTime = useRef(Date.now());
+  const lookingDownStart = useRef(null);
 
   // Model Refs
   const faceMeshModel = useRef(null);
@@ -358,6 +363,7 @@ function ActiveForm({ questions, onSubmit }) {
               } else {
                 setIsFaceDetected(false);
                 setGazeDirection('UNKNOWN');
+                lookingDownStart.current = null; // Reset timer
               }
             }
 
@@ -382,53 +388,81 @@ function ActiveForm({ questions, onSubmit }) {
     // --- IMPROVED GAZE MATH ---
     const detectGaze = (keypoints) => {
       // --- 1. Pupil Tracking (Horizontal) ---
-      // Using Both Eyes for reliability
-
-      // Right Eye (Subject's Right, Screen Left)
       const rInner = keypoints[33];
       const rOuter = keypoints[133];
       const rIris = keypoints[468];
       const rWidth = Math.abs(rOuter[0] - rInner[0]);
-      // Ratio 0 = Inner (Nose), 1 = Outer (Ear)
       const rDist = Math.abs(rIris[0] - rInner[0]);
       const rRatio = rDist / rWidth;
 
-      // Left Eye (Subject's Left, Screen Right)
-      const lInner = keypoints[362]; // Nose side
-      const lOuter = keypoints[263]; // Ear side
+      const lInner = keypoints[362];
+      const lOuter = keypoints[263];
       const lIris = keypoints[473];
       const lWidth = Math.abs(lOuter[0] - lInner[0]);
       const lDist = Math.abs(lIris[0] - lInner[0]);
       const lRatio = lDist / lWidth;
 
-      // Combined Horizontal Ratio
-      // Rightness = (R_Ratio + (1 - L_Ratio)) / 2
-
       const combinedRatio = (rRatio + (1 - lRatio)) / 2;
 
-      // --- 2. Head Pitch (Looking Down/Up) ---
-      const noseTop = keypoints[168];
+      // --- 2. Vertical Gaze (Looking Down with Eyes) ---
+      const rUpper = keypoints[159];
+      const rLower = keypoints[145];
+      const rEyeHeight = Math.abs(rLower[1] - rUpper[1]);
+      const rIrisDistTop = rIris[1] - rUpper[1];
+      const rVertRatio = rIrisDistTop / rEyeHeight;
+
+      // --- 3. Head Pitch (Nodding Down) ---
+      const forehead = keypoints[10];
       const noseTip = keypoints[1];
       const chin = keypoints[152];
+      const upperFaceLen = Math.abs(noseTip[1] - forehead[1]);
       const lowerFaceLen = Math.abs(chin[1] - noseTip[1]);
-      const fullFaceHeight = Math.abs(chin[1] - noseTop[1]);
-      const pitchRatio = lowerFaceLen / fullFaceHeight;
+      const pitchRatio = upperFaceLen > 0 ? lowerFaceLen / upperFaceLen : 1;
 
       // Update Debug Stats
       setDebugStats({
         pitch: pitchRatio.toFixed(2),
         hRatio: combinedRatio.toFixed(2),
+        vRatio: rVertRatio.toFixed(2),
       });
 
       let direction = 'CENTER';
 
-      // Thresholds (Widened Center)
-      if (combinedRatio < 0.3) direction = 'LEFT';
-      else if (combinedRatio > 0.7) direction = 'RIGHT';
+      // Horizontal Checks
+      if (combinedRatio < 0.35) direction = 'LEFT';
+      else if (combinedRatio > 0.65) direction = 'RIGHT';
 
-      // Vertical Priority
-      if (pitchRatio < 0.4) {
-        direction = 'DOWN';
+      // Vertical / Pitch Check (Looking Down)
+      if (pitchRatio < 0.85 || rVertRatio > 0.85) {
+        // POTENTIAL LOOKING DOWN DETECTED
+        // Check if user is typing (Activity Buffer)
+        const timeSinceInput = Date.now() - lastActivityTime.current;
+        const isTyping = timeSinceInput < 3000; // 3 seconds buffer
+
+        if (isTyping) {
+          // User is likely looking at keyboard while typing -> IGNORE
+          lookingDownStart.current = null;
+          direction = 'CENTER'; // Mask as center
+        } else {
+          // User is NOT typing
+          if (!lookingDownStart.current) {
+            lookingDownStart.current = Date.now();
+            // Grace period: Don't flag yet
+            direction = 'CENTER';
+          } else {
+            const duration = Date.now() - lookingDownStart.current;
+            if (duration > 15000) {
+              // Exceeded 15 seconds without typing -> FLAG
+              direction = 'DOWN';
+            } else {
+              // Still in 15s grace period
+              direction = 'CENTER';
+            }
+          }
+        }
+      } else {
+        // Not looking down
+        lookingDownStart.current = null;
       }
 
       setGazeDirection(direction);
@@ -506,13 +540,14 @@ function ActiveForm({ questions, onSubmit }) {
 
     const handleBlur = () => {
       setIsWindowFocused(false);
-      // Sometimes blur fires without visibility change (e.g. clicking iframe)
-      // We can count this as a switch too if needed, but let's stick to visibility for hard switches
     };
 
     const handleFocus = () => setIsWindowFocused(true);
 
     const handleKeyDown = (e) => {
+      // Update activity timestamp on any key press
+      lastActivityTime.current = Date.now();
+
       if (e.key === 'PrintScreen') {
         e.preventDefault();
         alert('Screenshots are not allowed.');
@@ -603,7 +638,11 @@ function ActiveForm({ questions, onSubmit }) {
                           : 'bg-amber-600/90'
                       }`}
                     >
-                      <Eye className='w-3 h-3 text-white' />
+                      {gazeDirection === 'CENTER' ? (
+                        <Eye className='w-3 h-3 text-white' />
+                      ) : (
+                        <EyeOff className='w-3 h-3 text-white' />
+                      )}
                       <span className='text-[10px] font-medium text-white tracking-wide'>
                         {gazeDirection === 'CENTER'
                           ? 'FOCUSED'
@@ -620,13 +659,24 @@ function ActiveForm({ questions, onSubmit }) {
                       </span>
                     </div>
                   )}
+
+                  {/* Typing Indicator */}
+                  {Date.now() - lastActivityTime.current < 3000 && (
+                    <div className='flex items-center gap-1.5 px-2 py-0.5 bg-blue-600/90 rounded-full backdrop-blur-sm'>
+                      <Keyboard className='w-3 h-3 text-white' />
+                      <span className='text-[10px] font-medium text-white tracking-wide'>
+                        TYPING
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* DEBUG STATS (Bottom Right of Video) */}
               {faceMeshModel.current && isFaceDetected && (
                 <div className='absolute bottom-1 right-1 text-[8px] text-white/50 bg-black/40 px-1 rounded font-mono'>
-                  P:{debugStats.pitch} Gaze:{debugStats.hRatio}
+                  P:{debugStats.pitch} V:{debugStats.vRatio} H:
+                  {debugStats.hRatio}
                 </div>
               )}
 
