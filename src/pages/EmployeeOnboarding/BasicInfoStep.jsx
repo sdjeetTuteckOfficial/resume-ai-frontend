@@ -15,15 +15,13 @@ import {
 import axiosInstance from '../../security/axiosInstance';
 
 export default function BasicInfoStep({ formData, onChange, onNext, onPrev }) {
-  // --- State ---
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [pagination, setPagination] = useState({ page: 0, limit: 8 }); // Increased limit
+  const [pagination, setPagination] = useState({ page: 0, limit: 8 });
 
   const [selectedJobData, setSelectedJobData] = useState(null);
 
-  // --- Fetch Jobs ---
   const fetchJobs = React.useCallback(async () => {
     setLoading(true);
     try {
@@ -50,7 +48,6 @@ export default function BasicInfoStep({ formData, onChange, onNext, onPrev }) {
     return () => clearTimeout(timer);
   }, [fetchJobs]);
 
-  // --- Handlers ---
   const handleSearch = (e) => {
     setSearchTerm(e.target.value);
     setPagination((prev) => ({ ...prev, page: 0 }));
@@ -58,7 +55,12 @@ export default function BasicInfoStep({ formData, onChange, onNext, onPrev }) {
 
   const handleSelect = (job) => {
     setSelectedJobData(job);
+
+    // 1. Update Job Role (Name)
     onChange({ target: { name: 'jobRole', value: job.job_name } });
+
+    // 2. NEW: Update Job ID
+    onChange({ target: { name: 'job_id', value: job.id } });
   };
 
   const handlePageChange = (direction) => {
@@ -82,11 +84,9 @@ export default function BasicInfoStep({ formData, onChange, onNext, onPrev }) {
         </p>
       </div>
 
-      {/* --- SPLIT VIEW LAYOUT --- */}
       <div className='flex-1 min-h-0 flex flex-col md:flex-row gap-4'>
         {/* LEFT PANEL: Job List */}
         <div className='flex-1 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden'>
-          {/* Search Header */}
           <div className='p-3 bg-slate-50 border-b border-slate-200'>
             <div className='relative'>
               <Search className='absolute left-3 top-2.5 h-4 w-4 text-slate-400' />
@@ -100,7 +100,6 @@ export default function BasicInfoStep({ formData, onChange, onNext, onPrev }) {
             </div>
           </div>
 
-          {/* List Items */}
           <div className='flex-1 overflow-y-auto'>
             {loading ? (
               <div className='h-full flex items-center justify-center'>
@@ -174,7 +173,7 @@ export default function BasicInfoStep({ formData, onChange, onNext, onPrev }) {
           </div>
         </div>
 
-        {/* RIGHT PANEL: Description (Hidden on mobile if needed, but flex-col handles it) */}
+        {/* RIGHT PANEL: Description */}
         <div className='flex-[1.2] bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden'>
           <div className='bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-center gap-2'>
             <FileText className='h-4 w-4 text-slate-500' />
@@ -231,7 +230,6 @@ export default function BasicInfoStep({ formData, onChange, onNext, onPrev }) {
         </div>
       </div>
 
-      {/* --- Footer Controls --- */}
       <div className='flex gap-3 pt-2 shrink-0'>
         <button
           onClick={onPrev}
