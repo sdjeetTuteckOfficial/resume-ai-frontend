@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { ArrowLeft, Loader2, Check } from 'lucide-react';
-import FileUpload from './FileUpload';
+import AiInterviewManager from './AIInterviewManager';
 export default function UploadStep({
   formData,
   onFileChange,
@@ -22,7 +22,7 @@ export default function UploadStep({
         <p className='text-[10px] text-gray-400'>Upload your resume</p>
       </div>
 
-      <FileUpload
+      <AiInterviewManager
         file={formData.cvFile}
         onFileChange={onFileChange}
         onRemoveFile={onRemoveFile}

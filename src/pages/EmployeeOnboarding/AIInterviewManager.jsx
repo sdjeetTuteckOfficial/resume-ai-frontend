@@ -11,15 +11,21 @@ import {
   Send,
   ShieldAlert,
   EyeOff,
-  Camera,
   CameraOff,
   UserCheck,
-  UserX,
   Smartphone,
   Eye,
   History,
   Keyboard,
+  Radio,
+  Wifi,
 } from 'lucide-react';
+
+// --- CONFIGURATION ---
+const WEBSOCKET_URL = 'ws://localhost:8000/ws/candidate';
+const STUN_SERVERS = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+};
 
 // --- 1. HELPER: Dynamic Schema Generator ---
 const generateYupSchema = (questions) => {
@@ -112,7 +118,13 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
   }
 
   if (status === 'active' && questions) {
-    return <ActiveForm questions={questions} onSubmit={handleFinalSubmit} />;
+    return (
+      <ActiveForm
+        questions={questions}
+        onSubmit={handleFinalSubmit}
+        userId={userId}
+      />
+    );
   }
 
   return (
@@ -155,7 +167,7 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
 }
 
 // --- 3. INTERNAL SUB-COMPONENT (The Form) ---
-function ActiveForm({ questions, onSubmit }) {
+function ActiveForm({ questions, onSubmit, userId }) {
   // Violation Counters
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [isWindowFocused, setIsWindowFocused] = useState(true);
@@ -165,11 +177,18 @@ function ActiveForm({ questions, onSubmit }) {
   const canvasRef = useRef(null);
   const [webcamError, setWebcamError] = useState('');
 
+  // WebRTC Refs
+  const ws = useRef(null);
+  const peerConnection = useRef(null);
+  const localStreamRef = useRef(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const lastViolationReport = useRef(0); // Throttle violations
+
   // AI Detection States
   const [isFaceDetected, setIsFaceDetected] = useState(true);
   const [isPhoneDetected, setIsPhoneDetected] = useState(false);
   const [gazeDirection, setGazeDirection] = useState('CENTER');
-  const [debugStats, setDebugStats] = useState({ pitch: 0, yaw: 0, vRatio: 0 }); // For debugging
+  const [debugStats, setDebugStats] = useState({ pitch: 0, yaw: 0, vRatio: 0 });
   const [modelLoaded, setModelLoaded] = useState(false);
 
   // Activity Tracking for Gaze Logic
@@ -192,18 +211,35 @@ function ActiveForm({ questions, onSubmit }) {
     mode: 'onBlur',
   });
 
+  // --- VIOLATION REPORTER ---
+  const reportViolation = (msg) => {
+    // Throttle: Only send 1 violation every 2 seconds
+    const now = Date.now();
+    if (now - lastViolationReport.current < 2000) return;
+
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      console.log('Reporting Violation:', msg);
+      ws.current.send(
+        JSON.stringify({
+          target: 'admin',
+          payload: { type: 'violation', message: msg },
+        })
+      );
+      lastViolationReport.current = now;
+    }
+  };
+
   // --- 1. LOAD AI MODELS DYNAMICALLY ---
   useEffect(() => {
     let isMounted = true;
 
     const loadModels = async () => {
-      // 1. Check if already loaded
       if (window.faceLandmarksDetection && window.tf && window.cocoSsd) {
         initModel();
         return;
       }
 
-      // 2. Set a timeout to give up on AI and just show video (Fallback)
+      // Fallback timeout
       const timeoutId = setTimeout(() => {
         if (isMounted && !modelLoaded) {
           console.warn('AI Model load timed out. Switch to passive mode.');
@@ -212,53 +248,26 @@ function ActiveForm({ questions, onSubmit }) {
       }, 20000);
 
       try {
-        // Load TFJS Core
-        await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core';
-          script.async = true;
-          script.onload = resolve;
-          script.onerror = reject;
-          document.body.appendChild(script);
-        });
+        const scripts = [
+          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core',
+          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter',
+          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl',
+          'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd',
+          'https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@0.0.3',
+        ];
 
-        // Load dependencies
-        await Promise.all([
-          new Promise((resolve) => {
+        for (const src of scripts) {
+          await new Promise((resolve, reject) => {
             const s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter';
+            s.src = src;
+            s.async = true;
             s.onload = resolve;
+            s.onerror = reject;
             document.body.appendChild(s);
-          }),
-          new Promise((resolve) => {
-            const s = document.createElement('script');
-            s.src =
-              'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl';
-            s.onload = resolve;
-            document.body.appendChild(s);
-          }),
-        ]);
-
-        // Load Models
-        await Promise.all([
-          new Promise((resolve) => {
-            const s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd';
-            s.onload = resolve;
-            document.body.appendChild(s);
-          }),
-          new Promise((resolve) => {
-            const s = document.createElement('script');
-            s.src =
-              'https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@0.0.3';
-            s.onload = resolve;
-            document.body.appendChild(s);
-          }),
-        ]);
-
-        if (isMounted) {
-          await initModel();
+          });
         }
+
+        if (isMounted) await initModel();
         clearTimeout(timeoutId);
       } catch (err) {
         console.error('Failed to load AI models:', err);
@@ -268,7 +277,6 @@ function ActiveForm({ questions, onSubmit }) {
 
     const initModel = async () => {
       try {
-        // Initialize Face Mesh Model
         if (window.faceLandmarksDetection) {
           console.log('Loading Face Mesh...');
           const model = await window.faceLandmarksDetection.load(
@@ -277,7 +285,6 @@ function ActiveForm({ questions, onSubmit }) {
           if (isMounted) faceMeshModel.current = model;
         }
 
-        // Initialize Object Model (for Phone)
         if (window.cocoSsd) {
           console.log('Loading Object Model...');
           const model = await window.cocoSsd.load();
@@ -295,37 +302,36 @@ function ActiveForm({ questions, onSubmit }) {
     };
 
     loadModels();
-
     return () => {
       isMounted = false;
     };
   }, []);
 
-  // --- 2. WEBCAM & DETECTION LOOP ---
+  // --- 2. WEBCAM & WEBRTC CONNECTION ---
   useEffect(() => {
     const startWebcam = async () => {
       try {
-        // First attempt with preferred constraints
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: 320, height: 240, facingMode: 'user' },
+          audio: true,
         });
+
+        localStreamRef.current = stream;
         handleStreamSuccess(stream);
+        connectWebSocket();
       } catch (err) {
-        console.warn(
-          'Standard webcam init failed, retrying with loose constraints...',
-          err
-        );
+        console.warn('Standard webcam init failed, retrying...', err);
         try {
-          // Fallback: minimal constraints
           const stream = await navigator.mediaDevices.getUserMedia({
             video: true,
+            audio: true,
           });
+          localStreamRef.current = stream;
           handleStreamSuccess(stream);
+          connectWebSocket();
         } catch (fallbackErr) {
           console.error('Webcam Error:', fallbackErr);
-          setWebcamError(
-            'Camera access denied. Please allow permissions in your browser settings.'
-          );
+          setWebcamError('Camera access denied.');
         }
       }
     };
@@ -339,79 +345,117 @@ function ActiveForm({ questions, onSubmit }) {
       }
     };
 
+    const connectWebSocket = () => {
+      const uid = userId || 'current_user';
+      ws.current = new WebSocket(`${WEBSOCKET_URL}/${uid}`);
+
+      ws.current.onopen = () => {
+        console.log(`Connected to Signaling Server as: ${uid}`);
+        setIsStreaming(true);
+      };
+
+      ws.current.onmessage = async (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'signal') {
+          handleSignalMessage(message.data);
+        }
+      };
+
+      ws.current.onclose = () => {
+        console.log('Disconnected from signaling server');
+        setIsStreaming(false);
+      };
+    };
+
+    const handleSignalMessage = async (data) => {
+      if (data.type === 'request-offer') {
+        createPeerConnection();
+        const offer = await peerConnection.current.createOffer();
+        await peerConnection.current.setLocalDescription(offer);
+        sendSignal('offer', offer);
+      } else if (data.type === 'answer') {
+        if (peerConnection.current) {
+          await peerConnection.current.setRemoteDescription(
+            new RTCSessionDescription(data)
+          );
+        }
+      } else if (data.type === 'ice-candidate') {
+        if (peerConnection.current) {
+          await peerConnection.current.addIceCandidate(
+            new RTCIceCandidate(data)
+          );
+        }
+      }
+    };
+
+    const createPeerConnection = () => {
+      if (peerConnection.current) return;
+      peerConnection.current = new RTCPeerConnection(STUN_SERVERS);
+
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => {
+          peerConnection.current.addTrack(track, localStreamRef.current);
+        });
+      }
+
+      peerConnection.current.onicecandidate = (event) => {
+        if (event.candidate) sendSignal('ice-candidate', event.candidate);
+      };
+    };
+
+    const sendSignal = (type, payload) => {
+      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+        ws.current.send(
+          JSON.stringify({
+            target: 'admin',
+            payload: { type, ...payload },
+          })
+        );
+      }
+    };
+
+    // --- AI DETECTION LOOP ---
     const startDetection = () => {
-      // Run detection every 500ms
       detectionInterval.current = setInterval(async () => {
         const video = videoRef.current;
         if (video && video.readyState === 4) {
           try {
-            // A. Face & Gaze Detection (FaceMesh)
             if (faceMeshModel.current) {
               const predictions = await faceMeshModel.current.estimateFaces({
                 input: video,
               });
-
               if (predictions.length > 0) {
                 setIsFaceDetected(true);
-                const keypoints = predictions[0].scaledMesh; // 468 keypoints
-
-                // Determine Gaze Direction
+                const keypoints = predictions[0].scaledMesh;
                 detectGaze(keypoints);
-
-                // Draw eyes on canvas (Visual feedback)
                 drawGaze(video, keypoints);
               } else {
                 setIsFaceDetected(false);
                 setGazeDirection('UNKNOWN');
-                lookingDownStart.current = null; // Reset timer
+                reportViolation('Face Not Visible');
               }
             }
 
-            // B. Phone Detection (COCO-SSD)
             if (objectModel.current) {
               const objects = await objectModel.current.detect(video);
               const phone = objects.find((obj) => obj.class === 'cell phone');
-
               if (phone) {
                 setIsPhoneDetected(true);
+                reportViolation('Phone Detected');
               } else {
                 setIsPhoneDetected(false);
               }
             }
           } catch (err) {
-            console.warn('Detection Error', err);
+            // console.warn('Detection Error', err);
           }
         }
       }, 500);
     };
 
-    // --- IMPROVED GAZE MATH ---
+    // --- GAZE & DRAW ---
     const detectGaze = (keypoints) => {
-      // --- 1. Pupil Tracking (Horizontal) ---
-      const rInner = keypoints[33];
-      const rOuter = keypoints[133];
-      const rIris = keypoints[468];
-      const rWidth = Math.abs(rOuter[0] - rInner[0]);
-      const rDist = Math.abs(rIris[0] - rInner[0]);
-      const rRatio = rDist / rWidth;
-
-      const lInner = keypoints[362];
-      const lOuter = keypoints[263];
-      const lIris = keypoints[473];
-      const lWidth = Math.abs(lOuter[0] - lInner[0]);
-      const lDist = Math.abs(lIris[0] - lInner[0]);
-      const lRatio = lDist / lWidth;
-
-      const combinedRatio = (rRatio + (1 - lRatio)) / 2;
-
-      // --- 2. Vertical Gaze (Looking Down with Eyes) ---
-      const rUpper = keypoints[159];
-      const rLower = keypoints[145];
-      const rEyeHeight = Math.abs(rLower[1] - rUpper[1]);
-      const rIrisDistTop = rIris[1] - rUpper[1];
-      const rVertRatio = rIrisDistTop / rEyeHeight;
-
-      // --- 3. Head Pitch (Nodding Down) ---
+      // 1. Calculate Pitch (Nodding Down)
       const forehead = keypoints[10];
       const noseTip = keypoints[1];
       const chin = keypoints[152];
@@ -419,72 +463,62 @@ function ActiveForm({ questions, onSubmit }) {
       const lowerFaceLen = Math.abs(chin[1] - noseTip[1]);
       const pitchRatio = upperFaceLen > 0 ? lowerFaceLen / upperFaceLen : 1;
 
-      // Update Debug Stats
+      // Debug stats for overlay
       setDebugStats({
         pitch: pitchRatio.toFixed(2),
-        hRatio: combinedRatio.toFixed(2),
-        vRatio: rVertRatio.toFixed(2),
+        hRatio: 0,
+        vRatio: 0,
       });
 
       let direction = 'CENTER';
 
-      // Horizontal Checks
-      if (combinedRatio < 0.35) direction = 'LEFT';
-      else if (combinedRatio > 0.65) direction = 'RIGHT';
-
-      // Vertical / Pitch Check (Looking Down)
-      if (pitchRatio < 0.85 || rVertRatio > 0.85) {
-        // POTENTIAL LOOKING DOWN DETECTED
-        // Check if user is typing (Activity Buffer)
+      // 2. Logic: If Looking Down AND Not Typing
+      if (pitchRatio < 0.85) {
         const timeSinceInput = Date.now() - lastActivityTime.current;
-        const isTyping = timeSinceInput < 3000; // 3 seconds buffer
+        const isTyping = timeSinceInput < 3000;
 
-        if (isTyping) {
-          // User is likely looking at keyboard while typing -> IGNORE
-          lookingDownStart.current = null;
-          direction = 'CENTER'; // Mask as center
-        } else {
-          // User is NOT typing
+        if (!isTyping) {
+          // User is looking down and NOT typing
           if (!lookingDownStart.current) {
+            // Start the timer
             lookingDownStart.current = Date.now();
-            // Grace period: Don't flag yet
-            direction = 'CENTER';
           } else {
+            // Check duration
             const duration = Date.now() - lookingDownStart.current;
-            if (duration > 15000) {
-              // Exceeded 15 seconds without typing -> FLAG
+            if (duration > 10000) {
+              // 10 Seconds Threshold
               direction = 'DOWN';
-            } else {
-              // Still in 15s grace period
-              direction = 'CENTER';
             }
           }
+        } else {
+          // User is typing, so looking down is allowed. Reset timer.
+          lookingDownStart.current = null;
         }
       } else {
-        // Not looking down
+        // User is looking UP (Center). Reset timer.
         lookingDownStart.current = null;
       }
 
       setGazeDirection(direction);
+
+      // 3. Report Violation
+      if (direction === 'DOWN') {
+        reportViolation(`User looking down for >10s`);
+      }
     };
 
     const drawGaze = (video, keypoints) => {
       const ctx = canvasRef.current?.getContext('2d');
       if (!ctx || !canvasRef.current) return;
-
-      // Match canvas size to video
       canvasRef.current.width = video.videoWidth;
       canvasRef.current.height = video.videoHeight;
-
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
-      // Draw Iris points
       const leftIris = keypoints[473];
       const rightIris = keypoints[468];
-      const noseTip = keypoints[1];
 
-      ctx.fillStyle = '#00FF00'; // Green dots for pupils
-      if (gazeDirection !== 'CENTER') ctx.fillStyle = '#FF0000'; // Red if looking away
+      // Visual Feedback: Green normally, Red ONLY if violation triggered
+      ctx.fillStyle = gazeDirection === 'DOWN' ? '#FF0000' : '#00FF00';
 
       [leftIris, rightIris].forEach((point) => {
         ctx.beginPath();
@@ -492,18 +526,10 @@ function ActiveForm({ questions, onSubmit }) {
         ctx.fill();
       });
 
-      // Draw Nose Tip for Head tracking reference
-      ctx.fillStyle = 'yellow';
-      ctx.beginPath();
-      ctx.arc(noseTip[0], noseTip[1], 2, 0, 2 * Math.PI);
-      ctx.fill();
-
-      // Draw Face Box
       const top = keypoints[10][1];
       const bottom = keypoints[152][1];
       const left = keypoints[234][0];
       const right = keypoints[454][0];
-
       ctx.strokeStyle = '#00FFFF';
       ctx.lineWidth = 1;
       ctx.strokeRect(left, top, right - left, bottom - top);
@@ -513,14 +539,14 @@ function ActiveForm({ questions, onSubmit }) {
 
     return () => {
       if (detectionInterval.current) clearInterval(detectionInterval.current);
-      if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = videoRef.current.srcObject.getTracks();
-        tracks.forEach((track) => track.stop());
-      }
+      if (ws.current) ws.current.close();
+      if (peerConnection.current) peerConnection.current.close();
+      if (localStreamRef.current)
+        localStreamRef.current.getTracks().forEach((track) => track.stop());
     };
-  }, [modelLoaded]);
+  }, [modelLoaded, userId]);
 
-  // --- SECURITY & PROCTORING LOGIC ---
+  // --- 3. SECURITY & EVENT LISTENERS ---
   useEffect(() => {
     const handleContextMenu = (e) => {
       e.preventDefault();
@@ -531,27 +557,26 @@ function ActiveForm({ questions, onSubmit }) {
       return false;
     };
 
-    // TAB SWITCH DETECTOR
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         setTabSwitchCount((prev) => prev + 1);
+        reportViolation('Tab Switch Detected');
       }
     };
 
     const handleBlur = () => {
       setIsWindowFocused(false);
+      reportViolation('Window Focus Lost');
     };
 
     const handleFocus = () => setIsWindowFocused(true);
 
     const handleKeyDown = (e) => {
-      // Update activity timestamp on any key press
       lastActivityTime.current = Date.now();
-
       if (e.key === 'PrintScreen') {
         e.preventDefault();
         alert('Screenshots are not allowed.');
-        if (navigator.clipboard) navigator.clipboard.writeText('');
+        reportViolation('Screenshot Attempt');
       }
     };
 
@@ -578,7 +603,7 @@ function ActiveForm({ questions, onSubmit }) {
 
   return (
     <div className='relative animate-in fade-in slide-in-from-bottom-4 duration-500 select-none'>
-      {/* --- WEBCAM FEED (Proctor View) --- */}
+      {/* --- FIXED WEBCAM FEED (PROCTOR VIEW) --- */}
       <div
         className={`fixed top-4 right-4 z-40 w-56 bg-slate-900 rounded-lg overflow-hidden shadow-xl border transition-colors ${
           !isFaceDetected || isPhoneDetected || gazeDirection === 'DOWN'
@@ -594,20 +619,28 @@ function ActiveForm({ questions, onSubmit }) {
             </div>
           ) : (
             <>
-              {/* Video Layer */}
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
-                className='w-full h-full object-cover transform scale-x-[-1]' // Mirror effect
+                className='w-full h-full object-cover transform scale-x-[-1]'
               />
-
-              {/* Canvas Layer for Eye Tracking */}
               <canvas
                 ref={canvasRef}
                 className='absolute inset-0 w-full h-full transform scale-x-[-1]'
               />
+
+              {/* Streaming Indicator */}
+              {isStreaming ? (
+                <div className='absolute top-2 right-2 flex items-center gap-1 bg-red-600/80 px-2 py-0.5 rounded text-[10px] text-white font-bold animate-pulse backdrop-blur-md'>
+                  <Radio className='w-3 h-3' /> LIVE
+                </div>
+              ) : (
+                <div className='absolute top-2 right-2 flex items-center gap-1 bg-slate-800/80 px-2 py-0.5 rounded text-[10px] text-slate-400 backdrop-blur-md'>
+                  <Wifi className='w-3 h-3' /> OFFLINE
+                </div>
+              )}
 
               {/* Status Overlays */}
               {faceMeshModel.current && (
@@ -629,7 +662,6 @@ function ActiveForm({ questions, onSubmit }) {
                     </span>
                   </div>
 
-                  {/* Gaze Status */}
                   {isFaceDetected && (
                     <div
                       className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full backdrop-blur-sm ${
@@ -659,27 +691,10 @@ function ActiveForm({ questions, onSubmit }) {
                       </span>
                     </div>
                   )}
-
-                  {/* Typing Indicator */}
-                  {Date.now() - lastActivityTime.current < 3000 && (
-                    <div className='flex items-center gap-1.5 px-2 py-0.5 bg-blue-600/90 rounded-full backdrop-blur-sm'>
-                      <Keyboard className='w-3 h-3 text-white' />
-                      <span className='text-[10px] font-medium text-white tracking-wide'>
-                        TYPING
-                      </span>
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* DEBUG STATS (Bottom Right of Video) */}
-              {faceMeshModel.current && isFaceDetected && (
-                <div className='absolute bottom-1 right-1 text-[8px] text-white/50 bg-black/40 px-1 rounded font-mono'>
-                  P:{debugStats.pitch} V:{debugStats.vRatio} H:
-                  {debugStats.hRatio}
-                </div>
-              )}
-
+              {/* Loading State */}
               {!modelLoaded && !webcamError && (
                 <div className='absolute inset-0 flex items-center justify-center bg-black/50'>
                   <Loader2 className='w-6 h-6 text-white animate-spin' />
@@ -740,7 +755,6 @@ function ActiveForm({ questions, onSubmit }) {
 
       {/* --- VIOLATION DASHBOARD --- */}
       <div className='grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6'>
-        {/* Success/Status Header */}
         <div className='p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3'>
           <div className='p-2 bg-green-100 rounded-full'>
             <CheckCircle2 className='w-5 h-5 text-green-700' />
@@ -755,7 +769,6 @@ function ActiveForm({ questions, onSubmit }) {
           </div>
         </div>
 
-        {/* Tab Switch Warning */}
         {tabSwitchCount > 0 && (
           <div className='p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3 animate-pulse'>
             <div className='p-2 bg-red-100 rounded-full'>
@@ -773,7 +786,7 @@ function ActiveForm({ questions, onSubmit }) {
         )}
       </div>
 
-      {/* Immediate Detection Warning */}
+      {/* --- IMMEDIATE ALERT --- */}
       {(!isFaceDetected || isPhoneDetected || gazeDirection === 'DOWN') && (
         <div className='mb-4 p-3 bg-red-100 border border-red-300 rounded-lg flex items-center gap-3 text-red-800 animate-bounce'>
           <ShieldAlert className='w-5 h-5 flex-shrink-0' />
@@ -805,13 +818,11 @@ function ActiveForm({ questions, onSubmit }) {
                 rows={4}
                 placeholder={field.placeholder || 'Type your answer...'}
                 onPaste={(e) => e.preventDefault()}
-                className={`w-full p-3 text-sm bg-slate-50 border rounded-lg outline-none transition-colors resize-y
-                  ${
-                    errors[field.id]
-                      ? 'border-red-300 focus:border-red-400 bg-red-50/20'
-                      : 'border-slate-200 focus:border-blue-500'
-                  }
-                `}
+                className={`w-full p-3 text-sm bg-slate-50 border rounded-lg outline-none transition-colors resize-y ${
+                  errors[field.id]
+                    ? 'border-red-300 focus:border-red-400 bg-red-50/20'
+                    : 'border-slate-200 focus:border-blue-500'
+                }`}
               />
             ) : field.type === 'radio' && field.options ? (
               <div className='grid grid-cols-1 sm:grid-cols-2 gap-3'>
@@ -838,13 +849,11 @@ function ActiveForm({ questions, onSubmit }) {
                 {...register(field.id)}
                 placeholder={field.placeholder}
                 onPaste={(e) => e.preventDefault()}
-                className={`w-full p-3 text-sm bg-slate-50 border rounded-lg outline-none transition-colors
-                  ${
-                    errors[field.id]
-                      ? 'border-red-300 focus:border-red-400 bg-red-50/20'
-                      : 'border-slate-200 focus:border-blue-500'
-                  }
-                `}
+                className={`w-full p-3 text-sm bg-slate-50 border rounded-lg outline-none transition-colors ${
+                  errors[field.id]
+                    ? 'border-red-300 focus:border-red-400 bg-red-50/20'
+                    : 'border-slate-200 focus:border-blue-500'
+                }`}
               />
             )}
 

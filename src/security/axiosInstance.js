@@ -8,6 +8,9 @@ switch (ENV) {
   case 'localhost':
     baseURL = apiBaseUrlDev;
     break;
+  case 'qh4fl3n2-5173.inc1.devtunnels.ms':
+    baseURL = apiBaseUrlDev;
+    break;
   default:
     throw new Error('Unknown environment');
 }
