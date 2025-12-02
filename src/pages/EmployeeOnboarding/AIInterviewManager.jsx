@@ -19,6 +19,7 @@ import {
   Keyboard,
   Radio,
   Wifi,
+  Activity,
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -48,7 +49,7 @@ const generateYupSchema = (questions) => {
 
 // --- 2. MAIN COMPONENT ---
 export default function AiInterviewManager({ userId, jobRole, onComplete }) {
-  const [status, setStatus] = useState('idle'); // 'idle' | 'loading' | 'active' | 'error'
+  const [status, setStatus] = useState('idle');
   const [questions, setQuestions] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -58,14 +59,12 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
     setErrorMessage('');
 
     try {
-      // Send jobRole to backend to get relevant questions
       const response = await axiosInstance.post('/gap/analyze-gap', {
         job_role: jobRole,
       });
 
       const data = response.data;
 
-      // Handle various response structures
       const questionsList =
         data.questions || data.screening_questions || data.critical_gaps;
 
@@ -97,8 +96,6 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
       onComplete();
     }
   };
-
-  // --- RENDER LOGIC ---
 
   if (status === 'error') {
     return (
@@ -168,7 +165,6 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
 
 // --- 3. INTERNAL SUB-COMPONENT (The Form) ---
 function ActiveForm({ questions, onSubmit, userId }) {
-  // Violation Counters
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [isWindowFocused, setIsWindowFocused] = useState(true);
 
@@ -182,7 +178,8 @@ function ActiveForm({ questions, onSubmit, userId }) {
   const peerConnection = useRef(null);
   const localStreamRef = useRef(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const lastViolationReport = useRef(0); // Throttle violations
+  const [iceStatus, setIceStatus] = useState('new'); // For debugging UI
+  const lastViolationReport = useRef(0);
 
   // AI Detection States
   const [isFaceDetected, setIsFaceDetected] = useState(true);
@@ -191,7 +188,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
   const [debugStats, setDebugStats] = useState({ pitch: 0, yaw: 0, vRatio: 0 });
   const [modelLoaded, setModelLoaded] = useState(false);
 
-  // Activity Tracking for Gaze Logic
+  // Activity Tracking
   const lastActivityTime = useRef(Date.now());
   const lookingDownStart = useRef(null);
 
@@ -213,12 +210,11 @@ function ActiveForm({ questions, onSubmit, userId }) {
 
   // --- VIOLATION REPORTER ---
   const reportViolation = (msg) => {
-    // Throttle: Only send 1 violation every 2 seconds
     const now = Date.now();
     if (now - lastViolationReport.current < 2000) return;
 
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      console.log('Reporting Violation:', msg);
+      console.log('⚠️ Reporting Violation:', msg);
       ws.current.send(
         JSON.stringify({
           target: 'admin',
@@ -229,7 +225,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
     }
   };
 
-  // --- 1. LOAD AI MODELS DYNAMICALLY ---
+  // --- 1. LOAD AI MODELS ---
   useEffect(() => {
     let isMounted = true;
 
@@ -239,7 +235,6 @@ function ActiveForm({ questions, onSubmit, userId }) {
         return;
       }
 
-      // Fallback timeout
       const timeoutId = setTimeout(() => {
         if (isMounted && !modelLoaded) {
           console.warn('AI Model load timed out. Switch to passive mode.');
@@ -278,7 +273,6 @@ function ActiveForm({ questions, onSubmit, userId }) {
     const initModel = async () => {
       try {
         if (window.faceLandmarksDetection) {
-          console.log('Loading Face Mesh...');
           const model = await window.faceLandmarksDetection.load(
             window.faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
           );
@@ -286,14 +280,12 @@ function ActiveForm({ questions, onSubmit, userId }) {
         }
 
         if (window.cocoSsd) {
-          console.log('Loading Object Model...');
           const model = await window.cocoSsd.load();
           if (isMounted) objectModel.current = model;
         }
 
         if (isMounted) {
           setModelLoaded(true);
-          console.log('All Models Loaded');
         }
       } catch (e) {
         console.error('Model Init Error', e);
@@ -350,7 +342,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
       ws.current = new WebSocket(`${WEBSOCKET_URL}/${uid}`);
 
       ws.current.onopen = () => {
-        console.log(`Connected to Signaling Server as: ${uid}`);
+        console.log(`✅ WS Connected as: ${uid}`);
         setIsStreaming(true);
       };
 
@@ -362,18 +354,26 @@ function ActiveForm({ questions, onSubmit, userId }) {
       };
 
       ws.current.onclose = () => {
-        console.log('Disconnected from signaling server');
+        console.log('❌ WS Disconnected');
         setIsStreaming(false);
       };
     };
 
     const handleSignalMessage = async (data) => {
       if (data.type === 'request-offer') {
+        console.log('📩 Received Request Offer. Creating fresh connection...');
+        // Force reset connection
+        if (peerConnection.current) {
+          peerConnection.current.close();
+          peerConnection.current = null;
+        }
         createPeerConnection();
         const offer = await peerConnection.current.createOffer();
         await peerConnection.current.setLocalDescription(offer);
-        sendSignal('offer', offer);
+        // FIX: Use explicit payload to ensure serialization works
+        sendSignal('offer', { type: offer.type, sdp: offer.sdp });
       } else if (data.type === 'answer') {
+        console.log('📩 Received Answer');
         if (peerConnection.current) {
           await peerConnection.current.setRemoteDescription(
             new RTCSessionDescription(data)
@@ -390,16 +390,27 @@ function ActiveForm({ questions, onSubmit, userId }) {
 
     const createPeerConnection = () => {
       if (peerConnection.current) return;
-      peerConnection.current = new RTCPeerConnection(STUN_SERVERS);
+
+      console.log('🛠️ Creating RTCPeerConnection');
+      const pc = new RTCPeerConnection(STUN_SERVERS);
+      peerConnection.current = pc;
+
+      pc.oniceconnectionstatechange = () => {
+        console.log('❄️ ICE State Change:', pc.iceConnectionState);
+        setIceStatus(pc.iceConnectionState);
+      };
 
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => {
-          peerConnection.current.addTrack(track, localStreamRef.current);
+          pc.addTrack(track, localStreamRef.current);
         });
       }
 
-      peerConnection.current.onicecandidate = (event) => {
-        if (event.candidate) sendSignal('ice-candidate', event.candidate);
+      pc.onicecandidate = (event) => {
+        // FIX: Serialize candidate to JSON to prevent sending empty objects
+        if (event.candidate) {
+          sendSignal('ice-candidate', event.candidate.toJSON());
+        }
       };
     };
 
@@ -662,9 +673,17 @@ function ActiveForm({ questions, onSubmit, userId }) {
                     </span>
                   </div>
 
+                  {/* ICE Status for Debugging */}
+                  <div className='flex items-center gap-1.5 px-2 py-0.5 mt-1 rounded-full backdrop-blur-sm bg-black/40'>
+                    <Activity className='w-3 h-3 text-blue-400' />
+                    <span className='text-[8px] font-mono text-blue-200 uppercase tracking-wide'>
+                      P2P: {iceStatus}
+                    </span>
+                  </div>
+
                   {isFaceDetected && (
                     <div
-                      className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full backdrop-blur-sm ${
+                      className={`flex items-center gap-1.5 px-2 py-0.5 mt-1 rounded-full backdrop-blur-sm ${
                         gazeDirection === 'CENTER'
                           ? 'bg-black/60'
                           : 'bg-amber-600/90'
@@ -684,7 +703,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
                   )}
 
                   {isPhoneDetected && (
-                    <div className='flex items-center gap-1.5 px-2 py-0.5 bg-red-600/90 rounded-full backdrop-blur-sm animate-pulse'>
+                    <div className='flex items-center gap-1.5 px-2 py-0.5 mt-1 bg-red-600/90 rounded-full backdrop-blur-sm animate-pulse'>
                       <Smartphone className='w-3 h-3 text-white' />
                       <span className='text-[10px] font-medium text-white tracking-wide'>
                         PHONE
