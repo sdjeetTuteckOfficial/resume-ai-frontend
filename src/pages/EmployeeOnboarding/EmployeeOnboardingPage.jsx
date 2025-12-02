@@ -8,7 +8,7 @@ import ConnectionStep from './ConnectionStep';
 import BasicInfoStep from './BasicInfoStep';
 import BioStep from './BioStep';
 import UploadStep from './UploadStep';
-import AiInterviewManager from './FileUpload';
+import AiInterviewManager from './GapEstimation';
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(1);
