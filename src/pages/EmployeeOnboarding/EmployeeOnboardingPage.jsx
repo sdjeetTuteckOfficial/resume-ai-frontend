@@ -8,7 +8,7 @@ import ConnectionStep from './ConnectionStep';
 import BasicInfoStep from './BasicInfoStep';
 import BioStep from './BioStep';
 import UploadStep from './UploadStep';
-import AiInterviewManager from './FileUpload'; // Import the Assessment Component
+import AiInterviewManager from './GapEstimation';
 
 export default function OnboardingPage() {
   const [step, setStep] = useState(1);
@@ -17,6 +17,7 @@ export default function OnboardingPage() {
 
   const [formData, setFormData] = useState({
     jobRole: '',
+    job_id: '', // <--- NEW: Initialize job_id in state
     bio: '',
     cvFile: null,
   });
@@ -34,14 +35,12 @@ export default function OnboardingPage() {
     setFormData((prev) => ({ ...prev, cvFile: null }));
   };
 
-  // INCREASED MAX STEPS TO 5
   const nextStep = () => setStep((prev) => Math.min(prev + 1, 5));
   const prevStep = () => setStep((prev) => Math.max(prev - 1, 1));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
-
     try {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       alert('Welcome aboard! Information submitted successfully.');
@@ -52,7 +51,6 @@ export default function OnboardingPage() {
     }
   };
 
-  // LAYOUT LOGIC: Wide for Step 2 (Basic Info) AND Step 4 (Assessment)
   const isWideLayout = step === 2 || step === 4;
 
   return (
@@ -69,7 +67,6 @@ export default function OnboardingPage() {
       >
         <AnimatedHeader isPlugged={isPlugged} />
 
-        {/* Updated Total Steps to 5 */}
         {step > 1 && <ProgressIndicator currentStep={step} totalSteps={5} />}
 
         <AnimatePresence mode='wait' custom={step}>
@@ -95,6 +92,7 @@ export default function OnboardingPage() {
           {step === 3 && (
             <BioStep
               key='step3'
+              // Ensure we pass formData here so BioStep can access job_id
               formData={formData}
               onChange={handleInputChange}
               onNext={nextStep}
@@ -102,7 +100,6 @@ export default function OnboardingPage() {
             />
           )}
 
-          {/* NEW STEP 4: AI ASSESSMENT */}
           {step === 4 && (
             <motion.div
               key='step4'
@@ -113,8 +110,8 @@ export default function OnboardingPage() {
             >
               <AiInterviewManager
                 userId='current_user'
-                jobRole={formData.jobRole} // Pass the role entered in Step 2
-                onComplete={nextStep} // Pass function to go to Step 5
+                jobRole={formData.jobRole}
+                onComplete={nextStep}
               />
               <button
                 onClick={prevStep}
@@ -125,7 +122,6 @@ export default function OnboardingPage() {
             </motion.div>
           )}
 
-          {/* MOVED UPLOAD TO STEP 5 */}
           {step === 5 && (
             <UploadStep
               key='step5'

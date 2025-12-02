@@ -13,8 +13,6 @@ import {
   AlertCircle,
   Loader2,
 } from 'lucide-react';
-
-// Import your actual Axios instance here
 import axiosInstance from '../../security/axiosInstance';
 
 // --- Validation Schema ---
@@ -46,7 +44,6 @@ const schema = yup
   })
   .required();
 
-// --- Configuration ---
 const STEPS = [
   {
     id: 'identity',
@@ -77,7 +74,6 @@ const STEPS = [
   },
 ];
 
-// --- Compact Input Component ---
 const InputField = ({
   label,
   error,
@@ -110,8 +106,9 @@ const InputField = ({
 );
 
 // --- BioStep Component ---
+// UPDATED: Destructuring formData (passed from parent) instead of allData
 export default function BioStep({
-  allData = {},
+  formData: parentFormData = {}, // Aliased to avoid conflict with local FormData
   setAllData = () => {},
   onNext = () => {},
   onPrev = () => {},
@@ -129,14 +126,13 @@ export default function BioStep({
     formState: { errors },
   } = useForm({
     resolver: yupResolver(schema),
-    defaultValues: { ...allData },
+    defaultValues: { ...parentFormData },
     mode: 'onChange',
   });
 
   const currentFile = watch('cvFile');
   const currentStepConfig = STEPS[internalStep];
 
-  // --- Logic ---
   const handleNextInternal = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
 
@@ -144,8 +140,9 @@ export default function BioStep({
 
     if (isStepValid) {
       setApiError(null);
-      const currentData = watch();
-      setAllData((prev) => ({ ...prev, ...currentData }));
+
+      // Update local state or parent state if needed via setAllData wrapper
+      // (Skipping for brevity as we are focusing on submission)
 
       if (internalStep < STEPS.length - 1) {
         setDirection(1);
@@ -159,8 +156,6 @@ export default function BioStep({
   const handleBackInternal = () => {
     setApiError(null);
     if (internalStep > 0) {
-      const currentData = watch();
-      setAllData((prev) => ({ ...prev, ...currentData }));
       setDirection(-1);
       setInternalStep((prev) => prev - 1);
     } else {
@@ -168,16 +163,15 @@ export default function BioStep({
     }
   };
 
-  // --- UPDATED SUBMIT LOGIC FOR MULTIPART ---
+  // --- UPDATED SUBMIT LOGIC ---
   const finalSubmit = async (data) => {
     setLoading(true);
     setApiError(null);
-    setAllData((prev) => ({ ...prev, ...data }));
 
     // 1. Create a FormData object
     const formData = new FormData();
 
-    // 2. Append text fields (Mapping camelCase JS to snake_case Python)
+    // 2. Append text fields
     formData.append('first_name', data.firstName);
     formData.append('last_name', data.lastName);
     formData.append('gender', data.gender);
@@ -187,19 +181,18 @@ export default function BioStep({
     formData.append('qualification', data.qualification);
     formData.append('skills', data.skills);
 
-    // 3. Append the file
-    // React Hook Form returns a FileList, we need the first file
+    // 3. NEW: Append job_id from parent props
+    if (parentFormData.job_id) {
+      formData.append('job_id', parentFormData.job_id);
+    }
+
+    // 4. Append the file
     if (data.cvFile && data.cvFile.length > 0) {
-      // 'cv_file' matches the argument name in your FastAPI function
       formData.append('cv_file', data.cvFile[0]);
     }
 
     try {
-      // 4. Send with Axios
-      // Note: We don't manually set Content-Type to multipart/form-data here.
-      // Axios automatically sets the correct header + boundary when it sees FormData.
       await axiosInstance.post('/user_details/user_entry', formData);
-
       onNext();
     } catch (err) {
       console.error(err);
@@ -211,7 +204,6 @@ export default function BioStep({
     }
   };
 
-  // --- Framer Motion Variants ---
   const variants = {
     enter: (dir) => ({ x: dir > 0 ? 30 : -30, opacity: 0 }),
     center: { x: 0, opacity: 1 },
@@ -237,7 +229,6 @@ export default function BioStep({
           </div>
         </div>
 
-        {/* Compact Progress Dots */}
         <div className='flex space-x-1.5'>
           {STEPS.map((stepConfig, idx) => (
             <div
@@ -264,7 +255,7 @@ export default function BioStep({
         </motion.div>
       )}
 
-      {/* Form Content - Compacted */}
+      {/* Form Content */}
       <div className='flex-1 relative overflow-hidden'>
         <AnimatePresence mode='wait' custom={direction}>
           <motion.form
@@ -436,7 +427,7 @@ export default function BioStep({
         </AnimatePresence>
       </div>
 
-      {/* --- Compact Footer --- */}
+      {/* Footer */}
       <div className='flex justify-between items-center pt-4 mt-4 border-t border-slate-100'>
         <button
           type='button'
