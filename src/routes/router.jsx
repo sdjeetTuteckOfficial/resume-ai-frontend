@@ -15,6 +15,7 @@ import NotFound from '../pages/NotFound';
 import JobManager from '../pages/JobDescriptionPage.jsx';
 import ForgotPasswordPage from '../pages/ForgotPassword.jsx';
 import OnboardingPage from '../pages/EmployeeOnboarding/EmployeeOnboardingPage.jsx';
+import AdminProctorView from '../pages/AdminProctorView/AdminProctorView.jsx';
 
 export const router = createBrowserRouter([
   {
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
             element: <AdminRoute />,
             children: [
               { path: 'jobs', element: <JobManager /> },
+              { path: 'admin-proctor-view', element: <AdminProctorView /> },
               { path: 'settings', element: <div>System Settings</div> },
             ],
           },
