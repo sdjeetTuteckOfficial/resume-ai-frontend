@@ -47,7 +47,8 @@ const generateYupSchema = (questions) => {
 };
 
 // --- 2. MAIN COMPONENT WRAPPER ---
-export default function AiInterviewManager({ userId, jobRole, onComplete }) {
+// REMOVED: userId prop
+export default function AiInterviewManager({ jobRole, onComplete }) {
   const [status, setStatus] = useState('idle');
   const [questions, setQuestions] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
@@ -116,7 +117,7 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
       <ActiveForm
         questions={questions}
         onSubmit={handleFinalSubmit}
-        userId={userId}
+        // REMOVED: userId={userId}
       />
     );
   }
@@ -161,7 +162,8 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
 }
 
 // --- 3. INTERNAL SUB-COMPONENT (The Logic & UI) ---
-function ActiveForm({ questions, onSubmit, userId }) {
+// REMOVED: userId prop
+function ActiveForm({ questions, onSubmit }) {
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [isWindowFocused, setIsWindowFocused] = useState(true);
 
@@ -323,12 +325,21 @@ function ActiveForm({ questions, onSubmit, userId }) {
       }
     };
 
+    // --- UPDATED: Connect using Token from LocalStorage ---
     const connectWebSocket = () => {
-      const uid = userId || 'current_user';
-      ws.current = new WebSocket(`${WEBSOCKET_URL}/${uid}`);
+      const token =
+        localStorage.getItem('access_token') || localStorage.getItem('token');
+
+      if (!token) {
+        console.error('❌ Auth Error: No token found');
+        setWebcamError('Authentication failed. Please login.');
+        return;
+      }
+
+      ws.current = new WebSocket(`${WEBSOCKET_URL}?token=${token}`);
 
       ws.current.onopen = () => {
-        console.log(`✅ WS Connected as: ${uid}`);
+        console.log(`✅ WS Connected`);
         setIsStreaming(true);
       };
 
@@ -533,7 +544,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
         localStreamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [modelLoaded, userId]);
+  }, [modelLoaded]); // REMOVED userId dependency
 
   // --- 3. SECURITY & EVENT LISTENERS ---
   useEffect(() => {
@@ -575,6 +586,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
 
   return (
     <div className='relative animate-in fade-in slide-in-from-bottom-4 duration-500 select-none'>
+      {/* ... (Your existing JSX remains unchanged) ... */}
       {/* --- FIXED WEBCAM FEED (PROCTOR VIEW) --- */}
       <div
         className={`fixed top-4 right-4 z-40 w-56 bg-slate-900 rounded-lg overflow-hidden shadow-xl border transition-colors ${

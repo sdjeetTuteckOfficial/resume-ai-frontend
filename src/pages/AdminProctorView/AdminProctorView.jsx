@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const SIGNALING_URL = 'ws://localhost:8000/ws/admin';
+// Note: We don't include the token here yet, we append it dynamically
+const SIGNALING_BASE_URL = 'ws://localhost:8000/ws/admin';
 const STUN_SERVERS = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
 };
@@ -26,16 +27,11 @@ export default function AdminProctorView() {
   const [violations, setViolations] = useState(0);
   const [lastAlert, setLastAlert] = useState(null);
 
-  // --- REFS (State that doesn't trigger re-renders) ---
+  // --- REFS ---
   const ws = useRef(null);
   const peerConnection = useRef(null);
   const remoteVideoRef = useRef(null);
-
-  // Track selected user in a ref to access it inside WebSocket event listeners
-  // without adding it to the useEffect dependency array (which would cause reconnects).
   const selectedUserRef = useRef(null);
-
-  // Queue to store ICE candidates that arrive before the remote description is set
   const iceCandidateQueue = useRef([]);
 
   // Sync ref with state
@@ -43,10 +39,21 @@ export default function AdminProctorView() {
     selectedUserRef.current = selectedUser;
   }, [selectedUser]);
 
-  // --- 1. CONNECT TO SIGNALING SERVER ---
+  // --- 1. CONNECT TO SIGNALING SERVER (WITH TOKEN) ---
   useEffect(() => {
     const connectAdminSocket = () => {
-      ws.current = new WebSocket(SIGNALING_URL);
+      // 1. Get Token from Local Storage
+      const token = localStorage.getItem('token'); // Ensure this matches your login storage key
+
+      if (!token) {
+        console.error('❌ No authentication token found. Please log in.');
+        setAdminSocketStatus('auth_failed');
+        return;
+      }
+
+      // 2. Append Token to URL
+      const wsUrl = `${SIGNALING_BASE_URL}?token=${token}`;
+      ws.current = new WebSocket(wsUrl);
 
       ws.current.onopen = () => {
         console.log('✅ Admin Connected to Signaling Server');
@@ -62,7 +69,6 @@ export default function AdminProctorView() {
           } else if (message.type === 'signal') {
             const currentTarget = selectedUserRef.current;
 
-            // Only process signals/violations if they are from the user we are watching
             if (message.data.type === 'violation') {
               handleViolationEvent(message.sender, message.data, currentTarget);
             } else {
@@ -74,10 +80,14 @@ export default function AdminProctorView() {
         }
       };
 
-      ws.current.onclose = () => {
-        console.log('❌ Admin Socket Disconnected');
-        setAdminSocketStatus('disconnected');
-        // Optional: Implement reconnect logic here
+      ws.current.onclose = (event) => {
+        console.log('❌ Admin Socket Disconnected', event.code, event.reason);
+        if (event.code === 1008) {
+          alert('Session Expired or Unauthorized. Please log in again.');
+          setAdminSocketStatus('auth_failed');
+        } else {
+          setAdminSocketStatus('disconnected');
+        }
       };
     };
 
@@ -87,15 +97,14 @@ export default function AdminProctorView() {
       if (ws.current) ws.current.close();
       if (peerConnection.current) peerConnection.current.close();
     };
-  }, []); // Empty dependency array = Connect only once on mount
+  }, []);
 
   // --- 2. HANDLE VIOLATIONS ---
   const handleViolationEvent = (senderId, data, currentTarget) => {
     if (senderId === currentTarget) {
       setViolations((prev) => prev + 1);
-      setLastAlert(data.message); // e.g., "Tab Switch Detected"
+      setLastAlert(data.message);
 
-      // Clear the alert text after 3 seconds
       setTimeout(() => setLastAlert(null), 3000);
     }
   };
@@ -115,9 +124,8 @@ export default function AdminProctorView() {
       peerConnection.current.close();
       peerConnection.current = null;
     }
-    iceCandidateQueue.current = []; // Clear queue
+    iceCandidateQueue.current = [];
 
-    // Clear previous video stream to prevent "frozen" image
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
     }
@@ -140,10 +148,6 @@ export default function AdminProctorView() {
       };
 
       peerConnection.current.onconnectionstatechange = () => {
-        console.log(
-          'Connection State:',
-          peerConnection.current.connectionState
-        );
         if (
           peerConnection.current.connectionState === 'failed' ||
           peerConnection.current.connectionState === 'disconnected'
@@ -152,7 +156,7 @@ export default function AdminProctorView() {
         }
       };
 
-      // Initiate the handshake by asking the User for an Offer
+      // Initiate the handshake
       sendSignal(userId, 'request-offer', {});
     } catch (err) {
       console.error('Failed to create PeerConnection:', err);
@@ -165,19 +169,15 @@ export default function AdminProctorView() {
 
     try {
       if (data.type === 'offer') {
-        // 1. Set Remote Description (The User's SDP)
         await peerConnection.current.setRemoteDescription(
           new RTCSessionDescription(data)
         );
 
-        // 2. Create and Set Local Answer (The Admin's SDP)
         const answer = await peerConnection.current.createAnswer();
         await peerConnection.current.setLocalDescription(answer);
 
-        // 3. Send Answer back to User
         sendSignal(senderId, 'answer', answer);
 
-        // 4. Process any ICE candidates that arrived before the offer
         while (iceCandidateQueue.current.length > 0) {
           const candidate = iceCandidateQueue.current.shift();
           await peerConnection.current.addIceCandidate(
@@ -185,7 +185,6 @@ export default function AdminProctorView() {
           );
         }
       } else if (data.type === 'ice-candidate') {
-        // Handle "Race Condition": If offer hasn't been set yet, queue the candidate
         if (peerConnection.current.remoteDescription) {
           await peerConnection.current.addIceCandidate(
             new RTCIceCandidate(data)
@@ -238,11 +237,16 @@ export default function AdminProctorView() {
               className={`w-2 h-2 rounded-full ${
                 adminSocketStatus === 'connected'
                   ? 'bg-green-500'
+                  : adminSocketStatus === 'auth_failed'
+                  ? 'bg-amber-500'
                   : 'bg-red-500'
               }`}
             />
             <p className='text-xs text-slate-500 font-medium uppercase tracking-wide'>
-              System: {adminSocketStatus}
+              System:{' '}
+              {adminSocketStatus === 'auth_failed'
+                ? 'Auth Failed'
+                : adminSocketStatus}
             </p>
           </div>
         </div>
