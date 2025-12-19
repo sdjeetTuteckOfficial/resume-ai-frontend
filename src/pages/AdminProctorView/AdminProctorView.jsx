@@ -5,7 +5,6 @@ import {
   Loader,
   Shield,
   AlertTriangle,
-  Wifi,
   Activity,
   XCircle,
   AlertOctagon,
@@ -27,9 +26,22 @@ export default function AdminProctorView() {
   const [violations, setViolations] = useState(0);
   const [lastAlert, setLastAlert] = useState(null);
 
+  // --- REFS (State that doesn't trigger re-renders) ---
   const ws = useRef(null);
   const peerConnection = useRef(null);
   const remoteVideoRef = useRef(null);
+
+  // Track selected user in a ref to access it inside WebSocket event listeners
+  // without adding it to the useEffect dependency array (which would cause reconnects).
+  const selectedUserRef = useRef(null);
+
+  // Queue to store ICE candidates that arrive before the remote description is set
+  const iceCandidateQueue = useRef([]);
+
+  // Sync ref with state
+  useEffect(() => {
+    selectedUserRef.current = selectedUser;
+  }, [selectedUser]);
 
   // --- 1. CONNECT TO SIGNALING SERVER ---
   useEffect(() => {
@@ -37,7 +49,7 @@ export default function AdminProctorView() {
       ws.current = new WebSocket(SIGNALING_URL);
 
       ws.current.onopen = () => {
-        console.log('Admin Connected to Signaling Server');
+        console.log('✅ Admin Connected to Signaling Server');
         setAdminSocketStatus('connected');
       };
 
@@ -48,11 +60,13 @@ export default function AdminProctorView() {
           if (message.type === 'user-list-update') {
             setActiveUsers(message.users);
           } else if (message.type === 'signal') {
-            // Check if this is a Violation Event or a WebRTC Signal
+            const currentTarget = selectedUserRef.current;
+
+            // Only process signals/violations if they are from the user we are watching
             if (message.data.type === 'violation') {
-              handleViolationEvent(message.sender, message.data);
+              handleViolationEvent(message.sender, message.data, currentTarget);
             } else {
-              handleSignalMessage(message.sender, message.data);
+              handleSignalMessage(message.sender, message.data, currentTarget);
             }
           }
         } catch (err) {
@@ -61,7 +75,9 @@ export default function AdminProctorView() {
       };
 
       ws.current.onclose = () => {
+        console.log('❌ Admin Socket Disconnected');
         setAdminSocketStatus('disconnected');
+        // Optional: Implement reconnect logic here
       };
     };
 
@@ -71,12 +87,11 @@ export default function AdminProctorView() {
       if (ws.current) ws.current.close();
       if (peerConnection.current) peerConnection.current.close();
     };
-  }, [selectedUser]); // Re-bind if selectedUser changes to ensure alerts filter correctly
+  }, []); // Empty dependency array = Connect only once on mount
 
   // --- 2. HANDLE VIOLATIONS ---
-  const handleViolationEvent = (senderId, data) => {
-    // Only show alerts for the user we are currently watching
-    if (senderId === selectedUser) {
+  const handleViolationEvent = (senderId, data, currentTarget) => {
+    if (senderId === currentTarget) {
       setViolations((prev) => prev + 1);
       setLastAlert(data.message); // e.g., "Tab Switch Detected"
 
@@ -89,13 +104,22 @@ export default function AdminProctorView() {
   const startMonitoring = async (userId) => {
     if (selectedUser === userId) return;
 
+    // UI Updates
     setSelectedUser(userId);
     setConnectionStatus('connecting');
-    setViolations(0); // Reset stats for new user
+    setViolations(0);
     setLastAlert(null);
 
+    // Cleanup previous connection
     if (peerConnection.current) {
       peerConnection.current.close();
+      peerConnection.current = null;
+    }
+    iceCandidateQueue.current = []; // Clear queue
+
+    // Clear previous video stream to prevent "frozen" image
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
     }
 
     try {
@@ -103,6 +127,7 @@ export default function AdminProctorView() {
 
       peerConnection.current.ontrack = (event) => {
         if (remoteVideoRef.current) {
+          console.log('🎥 Video Stream Received');
           remoteVideoRef.current.srcObject = event.streams[0];
           setConnectionStatus('connected');
         }
@@ -115,11 +140,19 @@ export default function AdminProctorView() {
       };
 
       peerConnection.current.onconnectionstatechange = () => {
-        if (peerConnection.current.connectionState === 'failed') {
+        console.log(
+          'Connection State:',
+          peerConnection.current.connectionState
+        );
+        if (
+          peerConnection.current.connectionState === 'failed' ||
+          peerConnection.current.connectionState === 'disconnected'
+        ) {
           setConnectionStatus('failed');
         }
       };
 
+      // Initiate the handshake by asking the User for an Offer
       sendSignal(userId, 'request-offer', {});
     } catch (err) {
       console.error('Failed to create PeerConnection:', err);
@@ -127,19 +160,39 @@ export default function AdminProctorView() {
     }
   };
 
-  const handleSignalMessage = async (senderId, data) => {
-    if (!peerConnection.current || selectedUser !== senderId) return;
+  const handleSignalMessage = async (senderId, data, currentTarget) => {
+    if (!peerConnection.current || senderId !== currentTarget) return;
 
     try {
       if (data.type === 'offer') {
+        // 1. Set Remote Description (The User's SDP)
         await peerConnection.current.setRemoteDescription(
           new RTCSessionDescription(data)
         );
+
+        // 2. Create and Set Local Answer (The Admin's SDP)
         const answer = await peerConnection.current.createAnswer();
         await peerConnection.current.setLocalDescription(answer);
+
+        // 3. Send Answer back to User
         sendSignal(senderId, 'answer', answer);
+
+        // 4. Process any ICE candidates that arrived before the offer
+        while (iceCandidateQueue.current.length > 0) {
+          const candidate = iceCandidateQueue.current.shift();
+          await peerConnection.current.addIceCandidate(
+            new RTCIceCandidate(candidate)
+          );
+        }
       } else if (data.type === 'ice-candidate') {
-        await peerConnection.current.addIceCandidate(new RTCIceCandidate(data));
+        // Handle "Race Condition": If offer hasn't been set yet, queue the candidate
+        if (peerConnection.current.remoteDescription) {
+          await peerConnection.current.addIceCandidate(
+            new RTCIceCandidate(data)
+          );
+        } else {
+          iceCandidateQueue.current.push(data);
+        }
       }
     } catch (err) {
       console.error('Signaling Error:', err);
@@ -154,6 +207,20 @@ export default function AdminProctorView() {
           payload: { type, ...payload },
         })
       );
+    } else {
+      console.warn('WebSocket not open. Cannot send signal.');
+    }
+  };
+
+  const disconnectUser = () => {
+    setSelectedUser(null);
+    setConnectionStatus('idle');
+    if (peerConnection.current) {
+      peerConnection.current.close();
+      peerConnection.current = null;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
     }
   };
 
@@ -189,6 +256,11 @@ export default function AdminProctorView() {
               {activeUsers.length}
             </span>
           </div>
+          {activeUsers.length === 0 && (
+            <p className='text-sm text-slate-400 text-center py-4'>
+              No candidates online
+            </p>
+          )}
           {activeUsers.map((userId) => (
             <button
               key={userId}
@@ -256,10 +328,7 @@ export default function AdminProctorView() {
                 </div>
               </div>
               <button
-                onClick={() => {
-                  setSelectedUser(null);
-                  setConnectionStatus('idle');
-                }}
+                onClick={disconnectUser}
                 className='text-sm text-red-600 hover:bg-red-50 font-bold px-4 py-2 rounded-lg border border-transparent hover:border-red-100 flex items-center gap-2'
               >
                 <XCircle className='w-4 h-4' /> Disconnect
@@ -378,7 +447,7 @@ export default function AdminProctorView() {
               Proctoring Console Ready
             </h3>
             <p className='text-sm text-slate-500 mt-2'>
-              Select a candidate to begin.
+              Select a candidate from the sidebar to begin monitoring.
             </p>
           </div>
         )}

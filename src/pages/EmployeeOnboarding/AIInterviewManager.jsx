@@ -16,7 +16,6 @@ import {
   Smartphone,
   Eye,
   History,
-  Keyboard,
   Radio,
   Wifi,
   Activity,
@@ -47,7 +46,7 @@ const generateYupSchema = (questions) => {
   return yup.object().shape(schemaFields);
 };
 
-// --- 2. MAIN COMPONENT ---
+// --- 2. MAIN COMPONENT WRAPPER ---
 export default function AiInterviewManager({ userId, jobRole, onComplete }) {
   const [status, setStatus] = useState('idle');
   const [questions, setQuestions] = useState(null);
@@ -64,7 +63,6 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
       });
 
       const data = response.data;
-
       const questionsList =
         data.questions || data.screening_questions || data.critical_gaps;
 
@@ -91,9 +89,8 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
   };
 
   const handleFinalSubmit = async (answers) => {
-    console.log('Submitting to Backend:', answers);
     if (onComplete) {
-      onComplete();
+      onComplete(answers);
     }
   };
 
@@ -163,7 +160,7 @@ export default function AiInterviewManager({ userId, jobRole, onComplete }) {
   );
 }
 
-// --- 3. INTERNAL SUB-COMPONENT (The Form) ---
+// --- 3. INTERNAL SUB-COMPONENT (The Logic & UI) ---
 function ActiveForm({ questions, onSubmit, userId }) {
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [isWindowFocused, setIsWindowFocused] = useState(true);
@@ -177,15 +174,16 @@ function ActiveForm({ questions, onSubmit, userId }) {
   const ws = useRef(null);
   const peerConnection = useRef(null);
   const localStreamRef = useRef(null);
+  const iceCandidateQueue = useRef([]); // FIX: Queue for early ICE candidates
+
   const [isStreaming, setIsStreaming] = useState(false);
-  const [iceStatus, setIceStatus] = useState('new'); // For debugging UI
+  const [iceStatus, setIceStatus] = useState('new');
   const lastViolationReport = useRef(0);
 
   // AI Detection States
   const [isFaceDetected, setIsFaceDetected] = useState(true);
   const [isPhoneDetected, setIsPhoneDetected] = useState(false);
   const [gazeDirection, setGazeDirection] = useState('CENTER');
-  const [debugStats, setDebugStats] = useState({ pitch: 0, yaw: 0, vRatio: 0 });
   const [modelLoaded, setModelLoaded] = useState(false);
 
   // Activity Tracking
@@ -230,43 +228,36 @@ function ActiveForm({ questions, onSubmit, userId }) {
     let isMounted = true;
 
     const loadModels = async () => {
-      if (window.faceLandmarksDetection && window.tf && window.cocoSsd) {
-        initModel();
-        return;
-      }
-
-      const timeoutId = setTimeout(() => {
-        if (isMounted && !modelLoaded) {
-          console.warn('AI Model load timed out. Switch to passive mode.');
-          setModelLoaded(true);
-        }
-      }, 20000);
+      // Logic to check if scripts already exist or load them dynamically
+      const scripts = [
+        'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core',
+        'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter',
+        'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl',
+        'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd',
+        'https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@0.0.3',
+      ];
 
       try {
-        const scripts = [
-          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core',
-          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter',
-          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl',
-          'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd',
-          'https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@0.0.3',
-        ];
-
         for (const src of scripts) {
-          await new Promise((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = src;
-            s.async = true;
-            s.onload = resolve;
-            s.onerror = reject;
-            document.body.appendChild(s);
-          });
+          if (!document.querySelector(`script[src="${src}"]`)) {
+            await new Promise((resolve, reject) => {
+              const s = document.createElement('script');
+              s.src = src;
+              s.async = true;
+              s.onload = resolve;
+              s.onerror = reject;
+              document.body.appendChild(s);
+            });
+          }
         }
 
-        if (isMounted) await initModel();
-        clearTimeout(timeoutId);
+        // Slight delay to ensure TFJS backend initializes
+        setTimeout(async () => {
+          if (isMounted) await initModel();
+        }, 1000);
       } catch (err) {
-        console.error('Failed to load AI models:', err);
-        if (isMounted) setModelLoaded(true);
+        console.error('Failed to load AI scripts', err);
+        if (isMounted) setModelLoaded(true); // Fallback to allow exam even if AI fails
       }
     };
 
@@ -284,16 +275,19 @@ function ActiveForm({ questions, onSubmit, userId }) {
           if (isMounted) objectModel.current = model;
         }
 
-        if (isMounted) {
-          setModelLoaded(true);
-        }
+        if (isMounted) setModelLoaded(true);
       } catch (e) {
         console.error('Model Init Error', e);
         if (isMounted) setModelLoaded(true);
       }
     };
 
-    loadModels();
+    if (window.faceLandmarksDetection && window.tf && window.cocoSsd) {
+      initModel();
+    } else {
+      loadModels();
+    }
+
     return () => {
       isMounted = false;
     };
@@ -312,19 +306,10 @@ function ActiveForm({ questions, onSubmit, userId }) {
         handleStreamSuccess(stream);
         connectWebSocket();
       } catch (err) {
-        console.warn('Standard webcam init failed, retrying...', err);
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true,
-          });
-          localStreamRef.current = stream;
-          handleStreamSuccess(stream);
-          connectWebSocket();
-        } catch (fallbackErr) {
-          console.error('Webcam Error:', fallbackErr);
-          setWebcamError('Camera access denied.');
-        }
+        console.error('Webcam Error:', err);
+        setWebcamError(
+          'Camera access denied. Please allow camera permissions.'
+        );
       }
     };
 
@@ -332,6 +317,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
+          // Start detection loop only after video metadata is loaded
           startDetection();
         };
       }
@@ -354,51 +340,60 @@ function ActiveForm({ questions, onSubmit, userId }) {
       };
 
       ws.current.onclose = () => {
-        console.log('❌ WS Disconnected');
         setIsStreaming(false);
       };
     };
 
     const handleSignalMessage = async (data) => {
-      if (data.type === 'request-offer') {
-        console.log('📩 Received Request Offer. Creating fresh connection...');
-        // Force reset connection
-        if (peerConnection.current) {
-          peerConnection.current.close();
-          peerConnection.current = null;
+      try {
+        if (data.type === 'request-offer') {
+          console.log('📩 Admin requested offer. Starting handshake...');
+          createPeerConnection();
+          const offer = await peerConnection.current.createOffer();
+          await peerConnection.current.setLocalDescription(offer);
+          sendSignal('offer', { type: offer.type, sdp: offer.sdp });
+        } else if (data.type === 'answer') {
+          if (peerConnection.current) {
+            await peerConnection.current.setRemoteDescription(
+              new RTCSessionDescription(data)
+            );
+
+            // Process Queued Candidates now that Remote Description is set
+            while (iceCandidateQueue.current.length > 0) {
+              const candidate = iceCandidateQueue.current.shift();
+              await peerConnection.current.addIceCandidate(
+                new RTCIceCandidate(candidate)
+              );
+            }
+          }
+        } else if (data.type === 'ice-candidate') {
+          if (
+            peerConnection.current &&
+            peerConnection.current.remoteDescription
+          ) {
+            await peerConnection.current.addIceCandidate(
+              new RTCIceCandidate(data)
+            );
+          } else {
+            // Queue candidate if remote description isn't ready
+            iceCandidateQueue.current.push(data);
+          }
         }
-        createPeerConnection();
-        const offer = await peerConnection.current.createOffer();
-        await peerConnection.current.setLocalDescription(offer);
-        // FIX: Use explicit payload to ensure serialization works
-        sendSignal('offer', { type: offer.type, sdp: offer.sdp });
-      } else if (data.type === 'answer') {
-        console.log('📩 Received Answer');
-        if (peerConnection.current) {
-          await peerConnection.current.setRemoteDescription(
-            new RTCSessionDescription(data)
-          );
-        }
-      } else if (data.type === 'ice-candidate') {
-        if (peerConnection.current) {
-          await peerConnection.current.addIceCandidate(
-            new RTCIceCandidate(data)
-          );
-        }
+      } catch (err) {
+        console.error('Signaling Error:', err);
       }
     };
 
     const createPeerConnection = () => {
-      if (peerConnection.current) return;
+      if (peerConnection.current) {
+        peerConnection.current.close();
+      }
 
-      console.log('🛠️ Creating RTCPeerConnection');
       const pc = new RTCPeerConnection(STUN_SERVERS);
       peerConnection.current = pc;
+      iceCandidateQueue.current = []; // Clear queue on new connection
 
-      pc.oniceconnectionstatechange = () => {
-        console.log('❄️ ICE State Change:', pc.iceConnectionState);
-        setIceStatus(pc.iceConnectionState);
-      };
+      pc.oniceconnectionstatechange = () => setIceStatus(pc.iceConnectionState);
 
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => {
@@ -407,7 +402,6 @@ function ActiveForm({ questions, onSubmit, userId }) {
       }
 
       pc.onicecandidate = (event) => {
-        // FIX: Serialize candidate to JSON to prevent sending empty objects
         if (event.candidate) {
           sendSignal('ice-candidate', event.candidate.toJSON());
         }
@@ -425,12 +419,16 @@ function ActiveForm({ questions, onSubmit, userId }) {
       }
     };
 
-    // --- AI DETECTION LOOP ---
+    // --- AI DETECTION LOOP (Optimized) ---
     const startDetection = () => {
+      if (detectionInterval.current) clearInterval(detectionInterval.current);
+
+      // Run detection every 1 second (1000ms) to save CPU
       detectionInterval.current = setInterval(async () => {
         const video = videoRef.current;
-        if (video && video.readyState === 4) {
+        if (video && video.readyState === 4 && !document.hidden) {
           try {
+            // FACE DETECTION
             if (faceMeshModel.current) {
               const predictions = await faceMeshModel.current.estimateFaces({
                 input: video,
@@ -447,6 +445,7 @@ function ActiveForm({ questions, onSubmit, userId }) {
               }
             }
 
+            // OBJECT DETECTION (Run less frequently if needed, currently same loop)
             if (objectModel.current) {
               const objects = await objectModel.current.detect(video);
               const phone = objects.find((obj) => obj.class === 'cell phone');
@@ -458,61 +457,46 @@ function ActiveForm({ questions, onSubmit, userId }) {
               }
             }
           } catch (err) {
-            // console.warn('Detection Error', err);
+            // Suppress errors during transitions
           }
         }
-      }, 500);
+      }, 1000);
     };
 
     // --- GAZE & DRAW ---
     const detectGaze = (keypoints) => {
-      // 1. Calculate Pitch (Nodding Down)
+      // Pitch Calculation (Nodding Down)
       const forehead = keypoints[10];
       const noseTip = keypoints[1];
       const chin = keypoints[152];
+
       const upperFaceLen = Math.abs(noseTip[1] - forehead[1]);
       const lowerFaceLen = Math.abs(chin[1] - noseTip[1]);
       const pitchRatio = upperFaceLen > 0 ? lowerFaceLen / upperFaceLen : 1;
 
-      // Debug stats for overlay
-      setDebugStats({
-        pitch: pitchRatio.toFixed(2),
-        hRatio: 0,
-        vRatio: 0,
-      });
-
       let direction = 'CENTER';
 
-      // 2. Logic: If Looking Down AND Not Typing
+      // Thresholds: < 0.85 usually means looking down at keyboard/phone
       if (pitchRatio < 0.85) {
         const timeSinceInput = Date.now() - lastActivityTime.current;
-        const isTyping = timeSinceInput < 3000;
+        const isTyping = timeSinceInput < 3000; // Allow looking down if recently typed
 
         if (!isTyping) {
-          // User is looking down and NOT typing
           if (!lookingDownStart.current) {
-            // Start the timer
             lookingDownStart.current = Date.now();
-          } else {
-            // Check duration
-            const duration = Date.now() - lookingDownStart.current;
-            if (duration > 10000) {
-              // 10 Seconds Threshold
-              direction = 'DOWN';
-            }
+          } else if (Date.now() - lookingDownStart.current > 10000) {
+            // Only flag if looking down for > 10 seconds AND not typing
+            direction = 'DOWN';
           }
         } else {
-          // User is typing, so looking down is allowed. Reset timer.
-          lookingDownStart.current = null;
+          lookingDownStart.current = null; // Reset if typing
         }
       } else {
-        // User is looking UP (Center). Reset timer.
-        lookingDownStart.current = null;
+        lookingDownStart.current = null; // Reset if looking up
       }
 
       setGazeDirection(direction);
 
-      // 3. Report Violation
       if (direction === 'DOWN') {
         reportViolation(`User looking down for >10s`);
       }
@@ -525,25 +509,18 @@ function ActiveForm({ questions, onSubmit, userId }) {
       canvasRef.current.height = video.videoHeight;
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
+      // Simple Iris visualization
       const leftIris = keypoints[473];
       const rightIris = keypoints[468];
-
-      // Visual Feedback: Green normally, Red ONLY if violation triggered
       ctx.fillStyle = gazeDirection === 'DOWN' ? '#FF0000' : '#00FF00';
 
       [leftIris, rightIris].forEach((point) => {
-        ctx.beginPath();
-        ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
-        ctx.fill();
+        if (point) {
+          ctx.beginPath();
+          ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
+          ctx.fill();
+        }
       });
-
-      const top = keypoints[10][1];
-      const bottom = keypoints[152][1];
-      const left = keypoints[234][0];
-      const right = keypoints[454][0];
-      ctx.strokeStyle = '#00FFFF';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(left, top, right - left, bottom - top);
     };
 
     startWebcam();
@@ -552,22 +529,14 @@ function ActiveForm({ questions, onSubmit, userId }) {
       if (detectionInterval.current) clearInterval(detectionInterval.current);
       if (ws.current) ws.current.close();
       if (peerConnection.current) peerConnection.current.close();
-      if (localStreamRef.current)
+      if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
     };
   }, [modelLoaded, userId]);
 
   // --- 3. SECURITY & EVENT LISTENERS ---
   useEffect(() => {
-    const handleContextMenu = (e) => {
-      e.preventDefault();
-      return false;
-    };
-    const handleCopyCutPaste = (e) => {
-      e.preventDefault();
-      return false;
-    };
-
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         setTabSwitchCount((prev) => prev + 1);
@@ -580,35 +549,27 @@ function ActiveForm({ questions, onSubmit, userId }) {
       reportViolation('Window Focus Lost');
     };
 
-    const handleFocus = () => setIsWindowFocused(true);
-
     const handleKeyDown = (e) => {
       lastActivityTime.current = Date.now();
       if (e.key === 'PrintScreen') {
         e.preventDefault();
-        alert('Screenshots are not allowed.');
         reportViolation('Screenshot Attempt');
       }
     };
 
-    document.addEventListener('contextmenu', handleContextMenu);
-    document.addEventListener('copy', handleCopyCutPaste);
-    document.addEventListener('cut', handleCopyCutPaste);
-    document.addEventListener('paste', handleCopyCutPaste);
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.addEventListener('copy', (e) => e.preventDefault());
+    document.addEventListener('paste', (e) => e.preventDefault());
     document.addEventListener('visibilitychange', handleVisibilityChange);
     document.addEventListener('keydown', handleKeyDown);
     window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
+    window.addEventListener('focus', () => setIsWindowFocused(true));
 
     return () => {
-      document.removeEventListener('contextmenu', handleContextMenu);
-      document.removeEventListener('copy', handleCopyCutPaste);
-      document.removeEventListener('cut', handleCopyCutPaste);
-      document.removeEventListener('paste', handleCopyCutPaste);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('focus', () => setIsWindowFocused(true));
     };
   }, []);
 
